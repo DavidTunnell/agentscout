@@ -41,7 +41,7 @@ hex = "0.4"
 keyring = "3"
 
 # Screenshot capture + platform integration
-xcap = "0.0.14"
+xcap = "0.9"
 device_query = "2"
 active-win-pos-rs = "0.9"
 global-hotkey = "0.6"

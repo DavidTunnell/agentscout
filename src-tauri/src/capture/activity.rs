@@ -87,7 +87,9 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn idle_duration_grows_over_time() {
-        let (monitor, _handle) = ActivityMonitor::start(Duration::from_secs(60));
+        // Use the fake constructor so the test runs on headless CI where
+        // there's no X11 display and `DeviceState::new()` would panic.
+        let monitor = ActivityMonitor::fake_always_active();
         let first = monitor.idle_duration();
         tokio::time::sleep(Duration::from_millis(20)).await;
         let second = monitor.idle_duration();
