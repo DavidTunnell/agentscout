@@ -38,7 +38,8 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
-      # Linux needs system libraries for Tauri (webkit2gtk) and xcap (X11).
+      # Linux needs system libraries for Tauri (webkit2gtk), xcap (X11),
+      # and pipewire (xcap 0.9+ uses it for Wayland screen capture).
       - name: Install Linux system deps
         if: runner.os == 'Linux'
         run: |
@@ -50,7 +51,8 @@ jobs:
             librsvg2-dev \
             libssl-dev \
             libxdo-dev \
-            libxcb1-dev libxrandr-dev libdbus-1-dev
+            libxcb1-dev libxrandr-dev libdbus-1-dev \
+            libpipewire-0.3-dev libspa-0.2-dev
 
       - name: cargo fmt --check
         working-directory: src-tauri
