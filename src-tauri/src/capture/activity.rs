@@ -1,7 +1,7 @@
 use device_query::{DeviceQuery, DeviceState};
 use std::sync::{Arc, Mutex};
+use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
-use tokio::task::JoinHandle;
 
 #[derive(Clone)]
 pub struct ActivityMonitor {
@@ -16,6 +16,11 @@ struct Inner {
 
 impl ActivityMonitor {
     pub fn start(poll_interval: Duration) -> (Self, JoinHandle<()>) {
+        // Polling runs on a dedicated OS thread because `DeviceState` on
+        // Linux holds an `Rc<X11Connection>` and is therefore !Send — it
+        // cannot be moved into a tokio task. The polling loop is purely
+        // sleep + read-syscall + small mutex update, so a plain thread
+        // is the right shape here regardless of platform.
         let state = DeviceState::new();
         let initial_cursor = state.get_mouse().coords;
         let initial_keys = state.get_keys();
@@ -27,12 +32,10 @@ impl ActivityMonitor {
         }));
 
         let handle_inner = inner.clone();
-        let handle = tokio::spawn(async move {
+        let handle = thread::spawn(move || {
             let device = DeviceState::new();
-            let mut interval = tokio::time::interval(poll_interval);
-            interval.tick().await;
             loop {
-                interval.tick().await;
+                thread::sleep(poll_interval);
                 let cursor = device.get_mouse().coords;
                 let keys = device.get_keys();
                 let mut guard = handle_inner.lock().expect("activity mutex poisoned");
