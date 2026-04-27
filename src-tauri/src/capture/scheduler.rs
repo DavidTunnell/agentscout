@@ -1,5 +1,6 @@
 use super::{activity::ActivityMonitor, blocklist::Blocklist, screenshot};
 use crate::config::{Config, WorkHours};
+use crate::ocr::{generate_thumbnail, OcrEngine, ThumbnailFormat};
 use crate::storage::{crypto::FileCrypto, CaptureRecord, Storage};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Datelike, Local, NaiveTime, Timelike};
@@ -17,6 +18,7 @@ pub struct Scheduler {
     storage: Arc<Storage>,
     crypto: Arc<FileCrypto>,
     activity: ActivityMonitor,
+    ocr_engine: Arc<dyn OcrEngine>,
     paused: Arc<AtomicBool>,
     current_cycle_id: Arc<Mutex<String>>,
 }
@@ -33,12 +35,14 @@ impl Scheduler {
         storage: Arc<Storage>,
         crypto: Arc<FileCrypto>,
         activity: ActivityMonitor,
+        ocr_engine: Arc<dyn OcrEngine>,
     ) -> Self {
         Self {
             config,
             storage,
             crypto,
             activity,
+            ocr_engine,
             paused: Arc::new(AtomicBool::new(false)),
             current_cycle_id: Arc::new(Mutex::new(Uuid::new_v4().to_string())),
         }
@@ -109,10 +113,8 @@ impl Scheduler {
         let encrypted = self.crypto.encrypt(&png)?;
 
         let cycle_id = self.current_cycle_id.lock().await.clone();
-        let filename = format!(
-            "{}_tile.enc",
-            now.format("%Y%m%dT%H%M%S").to_string()
-        );
+        let stamp = now.format("%Y%m%dT%H%M%S").to_string();
+        let filename = format!("{}_tile.enc", stamp);
         let path = self.storage.root().join("screenshots").join(&filename);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
@@ -133,7 +135,70 @@ impl Scheduler {
             thumbnail_path: None,
         };
         let id = self.storage.record_capture(&rec)?;
+
+        if cfg.capture.budget_mode {
+            if let Err(e) = self.run_budget_pipeline(id, &png, &stamp, &path).await {
+                warn!("budget-mode pipeline failed for capture {}: {:#}", id, e);
+            }
+        }
+
         Ok(TickOutcome::Captured { capture_id: id })
+    }
+
+    async fn run_budget_pipeline(
+        &self,
+        capture_id: i64,
+        png: &[u8],
+        stamp: &str,
+        original_path: &std::path::Path,
+    ) -> Result<()> {
+        // Thumbnail (encrypted) — written before original is removed so a
+        // crash mid-pipeline never leaves us with no visual evidence at all.
+        let thumb = generate_thumbnail(png, 400, ThumbnailFormat::WebP)
+            .context("generating budget-mode thumbnail")?;
+        let enc_thumb = self.crypto.encrypt(&thumb)?;
+        let thumb_filename = format!("{}_thumb.enc", stamp);
+        let thumb_path = self
+            .storage
+            .root()
+            .join("thumbnails")
+            .join(&thumb_filename);
+        if let Some(parent) = thumb_path.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&thumb_path, &enc_thumb)
+            .with_context(|| format!("writing thumbnail to {}", thumb_path.display()))?;
+
+        // OCR
+        let ocr = self
+            .ocr_engine
+            .extract(png)
+            .await
+            .context("running OCR on capture")?;
+        debug!(
+            "OCR extracted {} tokens (engine={}, conf={:.2})",
+            ocr.token_count(),
+            ocr.engine,
+            ocr.confidence
+        );
+
+        // Persist results, then delete the original full-res image
+        self.storage.update_capture_ocr(
+            capture_id,
+            &ocr.text,
+            &ocr.engine,
+            Some(&thumb_path.to_string_lossy()),
+            true,
+        )?;
+
+        if let Err(e) = std::fs::remove_file(original_path) {
+            warn!(
+                "failed to remove original after budget-mode pipeline ({}): {}",
+                original_path.display(),
+                e
+            );
+        }
+        Ok(())
     }
 
     fn gate(&self, cfg: &Config, now: DateTime<Local>) -> Option<String> {

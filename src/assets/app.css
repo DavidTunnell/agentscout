@@ -138,3 +138,87 @@ code {
 .status-row .label {
   color: var(--muted);
 }
+
+/* Inspector page */
+.inspector-controls {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+#capture-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.capture-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  cursor: pointer;
+  transition: border-color 0.1s;
+}
+
+.capture-card:hover {
+  border-color: var(--accent);
+}
+
+.capture-thumb {
+  height: 100px;
+  background: var(--border);
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 8px;
+  font-size: 11px;
+}
+
+.capture-time {
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.capture-app {
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.capture-title {
+  font-size: 11px;
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.capture-ocr-tag {
+  display: inline-block;
+  margin-top: 6px;
+  padding: 1px 6px;
+  background: var(--accent);
+  color: white;
+  font-size: 10px;
+  border-radius: 3px;
+}
+
+.detail-image img {
+  max-width: 100%;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+.ocr-text {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 12px;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.4;
+  max-height: 300px;
+  overflow-y: auto;
+}

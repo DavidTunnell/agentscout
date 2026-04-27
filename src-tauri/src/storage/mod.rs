@@ -80,6 +80,77 @@ impl Storage {
             Ok(c.last_insert_rowid())
         })
     }
+
+    pub fn update_capture_ocr(
+        &self,
+        capture_id: i64,
+        ocr_text: &str,
+        ocr_engine: &str,
+        thumbnail_path: Option<&str>,
+        delete_original: bool,
+    ) -> Result<()> {
+        self.with_conn(|c| {
+            if delete_original {
+                c.execute(
+                    "UPDATE captures
+                     SET ocr_text = ?1, ocr_engine = ?2, thumbnail_path = ?3,
+                         image_path = COALESCE(?3, image_path)
+                     WHERE id = ?4",
+                    rusqlite::params![ocr_text, ocr_engine, thumbnail_path, capture_id],
+                )?;
+            } else {
+                c.execute(
+                    "UPDATE captures
+                     SET ocr_text = ?1, ocr_engine = ?2, thumbnail_path = ?3
+                     WHERE id = ?4",
+                    rusqlite::params![ocr_text, ocr_engine, thumbnail_path, capture_id],
+                )?;
+            }
+            Ok(())
+        })
+    }
+
+    pub fn list_recent_captures(&self, limit: u32) -> Result<Vec<CaptureRow>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT id, timestamp, cycle_id, foreground_app,
+                        foreground_window_title, image_path, ocr_text,
+                        thumbnail_path, ocr_engine
+                 FROM captures
+                 ORDER BY timestamp DESC
+                 LIMIT ?1",
+            )?;
+            let rows = stmt
+                .query_map([limit], |row| {
+                    Ok(CaptureRow {
+                        id: row.get(0)?,
+                        timestamp: row.get(1)?,
+                        cycle_id: row.get(2)?,
+                        foreground_app: row.get(3)?,
+                        foreground_window_title: row.get(4)?,
+                        image_path: row.get(5)?,
+                        ocr_text: row.get(6)?,
+                        thumbnail_path: row.get(7)?,
+                        ocr_engine: row.get(8)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct CaptureRow {
+    pub id: i64,
+    pub timestamp: i64,
+    pub cycle_id: String,
+    pub foreground_app: Option<String>,
+    pub foreground_window_title: Option<String>,
+    pub image_path: String,
+    pub ocr_text: Option<String>,
+    pub thumbnail_path: Option<String>,
+    pub ocr_engine: Option<String>,
 }
 
 #[derive(Debug, Clone)]

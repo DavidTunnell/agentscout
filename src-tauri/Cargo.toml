@@ -47,10 +47,17 @@ active-win-pos-rs = "0.9"
 global-hotkey = "0.6"
 
 # HTTP (for future: Anthropic + Gmail)
-reqwest = { version = "0.12", features = ["json", "rustls-tls"], default-features = false }
+reqwest = { version = "0.12", features = ["json", "rustls-tls", "stream"], default-features = false }
+futures-util = "0.3"
 
-# Image handling (thumbnails, PNG encoding)
-image = { version = "0.25", default-features = false, features = ["png"] }
+# Image handling (thumbnails, PNG encoding, WebP for compact thumbnails)
+image = { version = "0.25", default-features = false, features = ["png", "webp"] }
+
+# Base64 (for inspector data URLs and Anthropic vision payloads)
+base64 = "0.22"
+
+# Async traits (for OcrEngine, AnthropicClient)
+async-trait = "0.1"
 
 # Logging
 tracing = "0.1"

@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AgentScout — Inspector</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="assets/app.css" />
+</head>
+<body>
+  <header>
+    <h1>AgentScout</h1>
+    <nav>
+      <a href="index.html">Status</a>
+      <a href="inspector.html" class="active">Inspector</a>
+      <a href="settings.html">Settings</a>
+    </nav>
+  </header>
+
+  <main>
+    <section>
+      <h2>Recent captures</h2>
+      <div class="inspector-controls">
+        <label>
+          Show last
+          <select id="limit-select">
+            <option>20</option>
+            <option selected>50</option>
+            <option>100</option>
+            <option>200</option>
+          </select>
+          captures
+        </label>
+        <button id="refresh-btn" class="secondary">Refresh</button>
+      </div>
+      <p class="muted" id="meta"></p>
+      <div id="capture-grid"></div>
+    </section>
+
+    <section id="detail-panel" hidden>
+      <h2>Capture detail</h2>
+      <div id="detail-body"></div>
+    </section>
+  </main>
+
+  <script type="module" src="assets/inspector.js"></script>
+</body>
+</html>

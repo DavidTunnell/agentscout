@@ -76,6 +76,22 @@ const MIGRATIONS: &[&str] = &[
     );
     INSERT INTO schema_version (version) VALUES (1);
     "#,
+    // V2 — OCR engine tracking + conversation transcripts (week 2)
+    r#"
+    ALTER TABLE captures ADD COLUMN ocr_engine TEXT;
+
+    CREATE TABLE conversations (
+        id TEXT PRIMARY KEY,
+        kind TEXT NOT NULL,
+        started_at INTEGER NOT NULL,
+        completed_at INTEGER,
+        transcript_json TEXT NOT NULL,
+        output_path TEXT
+    );
+    CREATE INDEX idx_conversations_kind ON conversations(kind);
+
+    INSERT INTO schema_version (version) VALUES (2);
+    "#,
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -113,19 +129,20 @@ mod tests {
         let version: u32 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 1);
+        assert_eq!(version, 2);
 
         let table_count: u32 = conn
             .query_row(
                 "SELECT COUNT(*) FROM sqlite_master
                  WHERE type='table' AND name IN
                  ('captures','clusters','capture_cluster_map',
-                  'recommendations','skip_log','active_hours_counter')",
+                  'recommendations','skip_log','active_hours_counter',
+                  'conversations')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(table_count, 6);
+        assert_eq!(table_count, 7);
     }
 
     #[test]
@@ -133,5 +150,43 @@ mod tests {
         let conn = Connection::open_in_memory().unwrap();
         run_migrations(&conn).unwrap();
         run_migrations(&conn).unwrap();
+    }
+
+    #[test]
+    fn v2_adds_ocr_engine_column_to_captures() {
+        let conn = Connection::open_in_memory().unwrap();
+        run_migrations(&conn).unwrap();
+        let has_column: u32 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('captures')
+                 WHERE name='ocr_engine'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(has_column, 1);
+    }
+
+    #[test]
+    fn upgrades_from_v1_to_v2_without_data_loss() {
+        let conn = Connection::open_in_memory().unwrap();
+        // Run only V1
+        let v1_only = &[super::MIGRATIONS[0]];
+        for sql in v1_only {
+            conn.execute_batch(sql).unwrap();
+        }
+        conn.execute(
+            "INSERT INTO captures (timestamp, cycle_id, monitor_ids, image_path)
+             VALUES (1000, 'cycle-x', '[0]', '/tmp/foo.enc')",
+            [],
+        )
+        .unwrap();
+
+        // Now apply all migrations — should detect V1 and apply V2
+        run_migrations(&conn).unwrap();
+        let count: u32 = conn
+            .query_row("SELECT COUNT(*) FROM captures", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(count, 1, "v1 data must survive v2 migration");
     }
 }

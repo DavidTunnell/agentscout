@@ -1,10 +1,13 @@
 pub mod capture;
 pub mod config;
+pub mod conversation;
+pub mod ocr;
 pub mod storage;
 
 use crate::capture::{ActivityMonitor, Scheduler, TickOutcome};
 use crate::config::Config;
-use crate::storage::{crypto::FileCrypto, Storage};
+use crate::ocr::{MockEngine, OcrEngine, TesseractCliEngine};
+use crate::storage::{crypto::FileCrypto, CaptureRow, Storage};
 use anyhow::Result;
 use std::sync::{atomic::AtomicBool, Arc};
 use std::time::Duration;
@@ -14,7 +17,7 @@ use tauri::{
     AppHandle, Manager, State,
 };
 use tokio::sync::Mutex;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 pub struct AppState {
     pub config: Arc<Mutex<Config>>,
@@ -35,6 +38,9 @@ pub fn run() {
             cmd_get_status,
             cmd_toggle_pause,
             cmd_run_tick_now,
+            cmd_list_recent_captures,
+            cmd_get_capture_image,
+            cmd_list_starter_templates,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -57,11 +63,14 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
     let poll_interval = Duration::from_secs(10);
     let (activity, _handle) = ActivityMonitor::start(poll_interval);
 
+    let ocr_engine: Arc<dyn OcrEngine> = build_ocr_engine(storage.root());
+
     let scheduler = Arc::new(Scheduler::new(
         config.clone(),
         storage.clone(),
         crypto.clone(),
         activity.clone(),
+        ocr_engine,
     ));
     let paused = scheduler.pause_handle();
 
@@ -186,6 +195,98 @@ struct StatusPayload {
     budget_mode: bool,
     monitors_enabled: u32,
     schema_version: u32,
+}
+
+#[tauri::command]
+async fn cmd_list_recent_captures(
+    state: State<'_, AppState>,
+    limit: Option<u32>,
+) -> Result<Vec<CaptureRow>, String> {
+    state
+        .storage
+        .list_recent_captures(limit.unwrap_or(50))
+        .map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+async fn cmd_get_capture_image(
+    state: State<'_, AppState>,
+    capture_id: i64,
+) -> Result<CaptureImagePayload, String> {
+    let captures = state
+        .storage
+        .list_recent_captures(500)
+        .map_err(|e| format!("{:#}", e))?;
+    let row = captures
+        .into_iter()
+        .find(|r| r.id == capture_id)
+        .ok_or_else(|| format!("capture {} not found", capture_id))?;
+
+    // Prefer thumbnail (smaller payload); fall back to original.
+    let (path, mime) = match row.thumbnail_path.as_deref() {
+        Some(p) => (p.to_string(), "image/webp"),
+        None => (row.image_path.clone(), "image/png"),
+    };
+
+    let bytes = state
+        .crypto
+        .decrypt_from_file(std::path::Path::new(&path))
+        .map_err(|e| format!("decrypt {}: {:#}", path, e))?;
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+    Ok(CaptureImagePayload {
+        capture_id,
+        mime: mime.to_string(),
+        data_base64: b64,
+        from_thumbnail: row.thumbnail_path.is_some(),
+        ocr_text: row.ocr_text,
+    })
+}
+
+#[derive(serde::Serialize)]
+struct CaptureImagePayload {
+    capture_id: i64,
+    mime: String,
+    data_base64: String,
+    from_thumbnail: bool,
+    ocr_text: Option<String>,
+}
+
+#[tauri::command]
+async fn cmd_list_starter_templates() -> Result<Vec<StarterTemplateView>, String> {
+    Ok(crate::conversation::STARTER_TEMPLATES
+        .iter()
+        .map(|t| StarterTemplateView {
+            id: t.id.to_string(),
+            name: t.name.to_string(),
+            description: t.description.to_string(),
+        })
+        .collect())
+}
+
+#[derive(serde::Serialize)]
+struct StarterTemplateView {
+    id: String,
+    name: String,
+    description: String,
+}
+
+fn build_ocr_engine(storage_root: &std::path::Path) -> Arc<dyn OcrEngine> {
+    let tessdata_dir = storage_root.join("tessdata");
+    match TesseractCliEngine::new(tessdata_dir) {
+        Ok(engine) => {
+            info!("OCR engine: tesseract CLI");
+            Arc::new(engine)
+        }
+        Err(e) => {
+            warn!(
+                "tesseract CLI unavailable ({:#}); budget mode will run with mock OCR \
+                 returning empty text. Install Tesseract to enable real OCR.",
+                e
+            );
+            Arc::new(MockEngine::new(""))
+        }
+    }
 }
 
 fn init_tracing() {
