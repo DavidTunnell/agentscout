@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AgentScout</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="assets/app.css" />
+</head>
+<body>
+  <header>
+    <h1>AgentScout</h1>
+    <nav>
+      <a href="index.html" class="active">Status</a>
+      <a href="settings.html">Settings</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="status-card">
+      <h2>Status</h2>
+      <div id="status-body">Loading...</div>
+      <div class="actions">
+        <button id="toggle-pause">Pause capture</button>
+        <button id="tick-now">Capture now</button>
+      </div>
+    </section>
+
+    <section id="recent">
+      <h2>Recent captures</h2>
+      <p class="muted">Rendering captures requires the inspector UI (week 2). This panel is a stub for now.</p>
+    </section>
+  </main>
+
+  <script type="module" src="assets/app.js"></script>
+</body>
+</html>

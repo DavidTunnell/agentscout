@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AgentScout — Settings</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="assets/app.css" />
+</head>
+<body>
+  <header>
+    <h1>AgentScout</h1>
+    <nav>
+      <a href="index.html">Status</a>
+      <a href="settings.html" class="active">Settings</a>
+    </nav>
+  </header>
+
+  <main>
+    <section>
+      <h2>Settings</h2>
+      <p class="muted">
+        Settings UI is a stub for week 1. Config currently lives in
+        <code>config.json</code> in your platform data directory. Edit it
+        directly, then restart AgentScout to apply changes.
+      </p>
+      <p class="muted">
+        Full settings UI (cadence, monitors, blocklist, work hours, budget
+        mode, cost ceiling) lands in week 5.
+      </p>
+      <div id="config-path-hint"></div>
+    </section>
+  </main>
+
+  <script type="module" src="assets/settings.js"></script>
+</body>
+</html>

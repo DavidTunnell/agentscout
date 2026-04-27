@@ -1,0 +1,38 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "AgentScout",
+  "version": "0.1.0",
+  "identifier": "com.agentscout.app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "AgentScout",
+        "width": 900,
+        "height": 700,
+        "resizable": true,
+        "visible": false,
+        "label": "main"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Productivity",
+    "shortDescription": "Find AI agent opportunities in your daily work",
+    "longDescription": "AgentScout passively observes your work patterns and periodically recommends AI agent opportunities tailored to your role and goals. BYO API keys, fully local storage, encrypted at rest."
+  }
+}

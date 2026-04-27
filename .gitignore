@@ -1,0 +1,35 @@
+# Rust / Tauri
+/src-tauri/target
+/src-tauri/gen/schemas
+**/*.rs.bk
+Cargo.lock
+
+# Node / frontend
+/node_modules
+/dist
+/build
+
+# IDE
+/.vscode
+/.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Claude Code per-project state
+/.claude/
+
+# App data (should never end up in repo)
+/data
+*.sqlite
+*.sqlite-journal
+*.enc
