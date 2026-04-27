@@ -14,12 +14,18 @@ pub struct Storage {
 
 impl Storage {
     pub fn open() -> Result<Self> {
-        let root = config::storage_root()?;
+        Self::open_at(config::storage_root()?)
+    }
+
+    /// Open storage rooted at an explicit directory. Used by integration
+    /// tests and the smoke binary; production should call [`Storage::open`].
+    pub fn open_at(root: PathBuf) -> Result<Self> {
         std::fs::create_dir_all(&root)
             .with_context(|| format!("creating storage root at {}", root.display()))?;
         std::fs::create_dir_all(root.join("screenshots"))?;
         std::fs::create_dir_all(root.join("archive"))?;
         std::fs::create_dir_all(root.join("recommendations"))?;
+        std::fs::create_dir_all(root.join("thumbnails"))?;
 
         let db_path = root.join("database.sqlite");
         let conn = Connection::open(&db_path)

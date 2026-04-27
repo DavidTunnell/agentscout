@@ -11,6 +11,86 @@ pub struct MonitorCapture {
     pub y: i32,
 }
 
+/// Abstraction over monitor enumeration and capture. Production uses
+/// [`XcapScreenshotter`]; tests inject [`FakeScreenshotter`] to exercise
+/// the full pipeline without a real display.
+pub trait Screenshotter: Send + Sync {
+    fn list_monitors(&self) -> Result<Vec<MonitorInfo>>;
+    fn capture_enabled(&self, enabled_ids: &[u32]) -> Result<Vec<MonitorCapture>>;
+}
+
+pub struct XcapScreenshotter;
+
+impl XcapScreenshotter {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Default for XcapScreenshotter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Screenshotter for XcapScreenshotter {
+    fn list_monitors(&self) -> Result<Vec<MonitorInfo>> {
+        list_monitors()
+    }
+
+    fn capture_enabled(&self, enabled_ids: &[u32]) -> Result<Vec<MonitorCapture>> {
+        capture_enabled(enabled_ids)
+    }
+}
+
+/// Returns pre-baked synthetic captures. For integration tests that need
+/// to exercise the post-capture pipeline (encryption, OCR, thumbnail) on
+/// machines without a display.
+pub struct FakeScreenshotter {
+    pub monitors: Vec<MonitorInfo>,
+    pub captures: Vec<MonitorCapture>,
+}
+
+impl FakeScreenshotter {
+    pub fn single(width: u32, height: u32, fill: [u8; 4]) -> Self {
+        let img: RgbaImage = ImageBuffer::from_pixel(width, height, Rgba(fill));
+        let info = MonitorInfo {
+            id: 0,
+            name: "fake-primary".into(),
+            x: 0,
+            y: 0,
+            width,
+            height,
+        };
+        let cap = MonitorCapture {
+            monitor_id: 0,
+            image: img,
+            x: 0,
+            y: 0,
+        };
+        Self {
+            monitors: vec![info],
+            captures: vec![cap],
+        }
+    }
+}
+
+impl Screenshotter for FakeScreenshotter {
+    fn list_monitors(&self) -> Result<Vec<MonitorInfo>> {
+        Ok(self.monitors.clone())
+    }
+
+    fn capture_enabled(&self, enabled_ids: &[u32]) -> Result<Vec<MonitorCapture>> {
+        let enabled: HashSet<u32> = enabled_ids.iter().copied().collect();
+        Ok(self
+            .captures
+            .iter()
+            .filter(|c| enabled.contains(&c.monitor_id))
+            .cloned()
+            .collect())
+    }
+}
+
 pub fn list_monitors() -> Result<Vec<MonitorInfo>> {
     let monitors = Monitor::all().context("enumerating monitors via xcap")?;
     Ok(monitors

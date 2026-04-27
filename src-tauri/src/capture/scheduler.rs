@@ -1,4 +1,4 @@
-use super::{activity::ActivityMonitor, blocklist::Blocklist, screenshot};
+use super::{activity::ActivityMonitor, blocklist::Blocklist, screenshot, screenshot::Screenshotter};
 use crate::config::{Config, WorkHours};
 use crate::ocr::{generate_thumbnail, OcrEngine, ThumbnailFormat};
 use crate::storage::{crypto::FileCrypto, CaptureRecord, Storage};
@@ -19,6 +19,7 @@ pub struct Scheduler {
     crypto: Arc<FileCrypto>,
     activity: ActivityMonitor,
     ocr_engine: Arc<dyn OcrEngine>,
+    screenshotter: Arc<dyn Screenshotter>,
     paused: Arc<AtomicBool>,
     current_cycle_id: Arc<Mutex<String>>,
 }
@@ -36,6 +37,7 @@ impl Scheduler {
         crypto: Arc<FileCrypto>,
         activity: ActivityMonitor,
         ocr_engine: Arc<dyn OcrEngine>,
+        screenshotter: Arc<dyn Screenshotter>,
     ) -> Self {
         Self {
             config,
@@ -43,6 +45,7 @@ impl Scheduler {
             crypto,
             activity,
             ocr_engine,
+            screenshotter,
             paused: Arc::new(AtomicBool::new(false)),
             current_cycle_id: Arc::new(Mutex::new(Uuid::new_v4().to_string())),
         }
@@ -104,7 +107,9 @@ impl Scheduler {
             return Ok(TickOutcome::Skipped { reason });
         }
 
-        let captures = screenshot::capture_enabled(&enabled_ids)
+        let captures = self
+            .screenshotter
+            .capture_enabled(&enabled_ids)
             .context("capturing enabled monitors")?;
         let tiled = screenshot::tile_horizontally(captures)
             .context("tiling captured monitors")?;

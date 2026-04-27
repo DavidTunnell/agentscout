@@ -63,6 +63,19 @@ impl ActivityMonitor {
     pub fn is_active_within(&self, window: Duration) -> bool {
         self.idle_duration() <= window
     }
+
+    /// Build an ActivityMonitor that always reports "active right now"
+    /// without spawning the polling task. Used by tests and the smoke
+    /// binary, where there's no real input to observe but we want the
+    /// active-check gate to pass.
+    pub fn fake_always_active() -> Self {
+        let inner = Arc::new(Mutex::new(Inner {
+            last_activity: Instant::now(),
+            last_cursor: (0, 0),
+            last_keys_snapshot: Vec::new(),
+        }));
+        Self { inner }
+    }
 }
 
 #[cfg(test)]

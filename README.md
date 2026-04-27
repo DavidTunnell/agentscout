@@ -66,6 +66,41 @@ npm run tauri build
 > a 1024×1024 source PNG and run the `tauri icon` command above to generate
 > all platform-specific sizes. Final branding assets land in week 6.
 
+## Testing
+
+```bash
+cd src-tauri
+
+# Unit + integration tests (skips OCR goldens — see below)
+cargo test --all-targets -- --skip ocr_goldens
+
+# Smoke test: drives the full capture pipeline end-to-end against
+# synthetic screenshots and mock OCR. Exits 0 on success.
+cargo run --bin smoke
+
+# Smoke test using a real display + Tesseract (if installed)
+cargo run --bin smoke -- --live
+
+# OCR golden suite — needs fixture images checked into
+# tests/ocr_goldens/. See tests/ocr_goldens/README.md.
+cargo test --test ocr_goldens -- --nocapture
+
+# Lints + format check
+cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
+```
+
+CI runs all of the above on Windows, macOS, and Linux on every push to
+`main`. See `.github/workflows/ci.yml`.
+
+### Test inventory
+
+| Layer | Coverage |
+|---|---|
+| **Unit** (47+ tests) | config schema, AES-GCM crypto, blocklist matching, work-hours gate, schema migrations, OCR mock, thumbnail dimensions, conversation state machines, mock Anthropic client, starter templates |
+| **Integration** | `pipeline_integration.rs` — full budget pipeline against fakes; `storage_integration.rs` — DB CRUD; `ocr_goldens.rs` — token-recall harness |
+| **Smoke** | `cargo run --bin smoke` — end-to-end capture → encrypt → OCR → thumbnail → DB → decrypt round-trip |
+
 ## Configuration
 
 Your API keys go in the OS keychain — the app prompts for them on first run. Everything else lives in `config.json` in your platform data directory. The file is human-readable; edit it directly and restart AgentScout to apply changes. Schema is documented in [`SPEC.md`](./SPEC.md#63-configjson-schema).

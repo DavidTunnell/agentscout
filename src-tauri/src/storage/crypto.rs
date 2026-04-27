@@ -43,7 +43,9 @@ impl FileCrypto {
         Ok(Self { cipher })
     }
 
-    #[cfg(test)]
+    /// Construct a FileCrypto with an explicit 32-byte key. Bypasses the
+    /// keychain entirely. **For tests and the smoke binary only** — never
+    /// use this from production code paths.
     pub fn with_key(key: [u8; 32]) -> Self {
         Self {
             cipher: Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key)),

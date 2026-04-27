@@ -4,7 +4,7 @@ pub mod conversation;
 pub mod ocr;
 pub mod storage;
 
-use crate::capture::{ActivityMonitor, Scheduler, TickOutcome};
+use crate::capture::{ActivityMonitor, Scheduler, TickOutcome, XcapScreenshotter};
 use crate::config::Config;
 use crate::ocr::{MockEngine, OcrEngine, TesseractCliEngine};
 use crate::storage::{crypto::FileCrypto, CaptureRow, Storage};
@@ -64,6 +64,7 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
     let (activity, _handle) = ActivityMonitor::start(poll_interval);
 
     let ocr_engine: Arc<dyn OcrEngine> = build_ocr_engine(storage.root());
+    let screenshotter = Arc::new(XcapScreenshotter::new());
 
     let scheduler = Arc::new(Scheduler::new(
         config.clone(),
@@ -71,6 +72,7 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
         crypto.clone(),
         activity.clone(),
         ocr_engine,
+        screenshotter,
     ));
     let paused = scheduler.pause_handle();
 

@@ -6,4 +6,6 @@ pub mod screenshot;
 pub use activity::ActivityMonitor;
 pub use blocklist::Blocklist;
 pub use scheduler::{Scheduler, TickOutcome};
-pub use screenshot::{list_monitors, MonitorInfo};
+pub use screenshot::{
+    list_monitors, FakeScreenshotter, MonitorInfo, Screenshotter, XcapScreenshotter,
+};
