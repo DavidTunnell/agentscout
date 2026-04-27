@@ -139,10 +139,7 @@ impl Default for AnalysisConfig {
                 "claude-haiku-4-5".into(),
             ],
             model_synthesis: "claude-opus-4-7".into(),
-            model_synthesis_options: vec![
-                "claude-opus-4-7".into(),
-                "claude-sonnet-4-6".into(),
-            ],
+            model_synthesis_options: vec!["claude-opus-4-7".into(), "claude-sonnet-4-6".into()],
             perceptual_hash_threshold: 0.92,
             confidence_suppression_threshold: 0.3,
             archive_retention_days: 30,

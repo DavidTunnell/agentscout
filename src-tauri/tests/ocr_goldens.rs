@@ -88,10 +88,7 @@ async fn ocr_goldens_meet_recall_threshold() {
     let engine = match TesseractCliEngine::new(tessdata) {
         Ok(e) => e,
         Err(e) => {
-            eprintln!(
-                "skipping ocr_goldens — tesseract CLI unavailable: {:#}",
-                e
-            );
+            eprintln!("skipping ocr_goldens — tesseract CLI unavailable: {:#}", e);
             return;
         }
     };
@@ -159,9 +156,5 @@ fn token_recall_partial() {
     let extracted = "the quick brown";
     let expected = "the quick brown fox jumps";
     let recall = token_recall(extracted, expected);
-    assert!(
-        (recall - 0.6).abs() < 0.01,
-        "expected ~60%, got {}",
-        recall
-    );
+    assert!((recall - 0.6).abs() < 0.01, "expected ~60%, got {}", recall);
 }

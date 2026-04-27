@@ -160,9 +160,7 @@ fn handle_menu_event(app: &AppHandle, id: &str, scheduler: &Arc<Scheduler>) {
 async fn cmd_get_status(state: State<'_, AppState>) -> Result<StatusPayload, String> {
     let cfg = state.config.lock().await;
     Ok(StatusPayload {
-        paused: state
-            .paused
-            .load(std::sync::atomic::Ordering::SeqCst),
+        paused: state.paused.load(std::sync::atomic::Ordering::SeqCst),
         cadence_minutes: cfg.capture.cadence_minutes,
         budget_mode: cfg.capture.budget_mode,
         monitors_enabled: cfg.capture.monitors.iter().filter(|m| m.enabled).count() as u32,
@@ -172,9 +170,7 @@ async fn cmd_get_status(state: State<'_, AppState>) -> Result<StatusPayload, Str
 
 #[tauri::command]
 async fn cmd_toggle_pause(state: State<'_, AppState>) -> Result<bool, String> {
-    let was = state
-        .paused
-        .load(std::sync::atomic::Ordering::SeqCst);
+    let was = state.paused.load(std::sync::atomic::Ordering::SeqCst);
     state
         .paused
         .store(!was, std::sync::atomic::Ordering::SeqCst);

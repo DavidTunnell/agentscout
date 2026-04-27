@@ -99,7 +99,8 @@ impl TierCalibrationConversation {
         let path = storage_root.join("tier-definitions.json");
         std::fs::create_dir_all(storage_root)?;
         std::fs::write(&path, &json)?;
-        self.conversation.complete(path.to_string_lossy().to_string());
+        self.conversation
+            .complete(path.to_string_lossy().to_string());
         Ok(path)
     }
 }
@@ -140,11 +141,8 @@ mod tests {
 
     #[tokio::test]
     async fn finalize_rejects_invalid_json() {
-        let mut t = TierCalibrationConversation::new(
-            "custom",
-            "# User Profile\n**Role:** Test",
-        )
-        .unwrap();
+        let mut t =
+            TierCalibrationConversation::new("custom", "# User Profile\n**Role:** Test").unwrap();
         let mock = MockAnthropicClient::new(vec!["this is not json".into()]);
         let tmp = std::env::temp_dir().join(format!("as-tier-bad-{}", uuid::Uuid::new_v4()));
         let result = t.finalize(&mock, "claude-sonnet-4-6", &tmp).await;

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use image::{ImageBuffer, Rgba, RgbaImage};
+use image::{ImageBuffer, ImageEncoder, Rgba, RgbaImage};
 use std::collections::HashSet;
 use xcap::Monitor;
 
@@ -98,11 +98,11 @@ pub fn list_monitors() -> Result<Vec<MonitorInfo>> {
         .enumerate()
         .map(|(idx, m)| MonitorInfo {
             id: idx as u32,
-            name: m.name().unwrap_or_else(|_| format!("Monitor {}", idx)),
-            x: m.x().unwrap_or(0),
-            y: m.y().unwrap_or(0),
-            width: m.width().unwrap_or(0),
-            height: m.height().unwrap_or(0),
+            name: m.name().to_string(),
+            x: m.x(),
+            y: m.y(),
+            width: m.width(),
+            height: m.height(),
         })
         .collect())
 }
@@ -131,8 +131,8 @@ pub fn capture_enabled(enabled_ids: &[u32]) -> Result<Vec<MonitorCapture>> {
             .with_context(|| format!("capturing monitor {}", id))?;
         out.push(MonitorCapture {
             monitor_id: id,
-            x: monitor.x().unwrap_or(0),
-            y: monitor.y().unwrap_or(0),
+            x: monitor.x(),
+            y: monitor.y(),
             image,
         });
     }
@@ -166,7 +166,7 @@ pub fn encode_png(image: &RgbaImage) -> Result<Vec<u8>> {
         image::codecs::png::CompressionType::Fast,
         image::codecs::png::FilterType::Adaptive,
     )
-    .encode(
+    .write_image(
         image.as_raw(),
         image.width(),
         image.height(),

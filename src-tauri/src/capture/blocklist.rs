@@ -83,8 +83,7 @@ fn matches_parts(parts: &[Part], input: &str) -> bool {
             if parts.len() == 1 {
                 input == lit
             } else {
-                input.starts_with(lit.as_str())
-                    && matches_parts(&parts[1..], &input[lit.len()..])
+                input.starts_with(lit.as_str()) && matches_parts(&parts[1..], &input[lit.len()..])
             }
         }
         Some(Part::Wildcard) => {
@@ -125,7 +124,9 @@ mod tests {
     fn wildcard_title_match() {
         let b = bl(vec![], vec!["*Bank*", "*Incognito*"]);
         assert!(b.is_blocked(None, Some("Chase Bank – Accounts")).is_some());
-        assert!(b.is_blocked(None, Some("Google Chrome - Incognito")).is_some());
+        assert!(b
+            .is_blocked(None, Some("Google Chrome - Incognito"))
+            .is_some());
         assert!(b.is_blocked(None, Some("Stack Overflow")).is_none());
     }
 

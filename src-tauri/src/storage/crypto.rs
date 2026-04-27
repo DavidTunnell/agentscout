@@ -99,9 +99,7 @@ pub fn load_or_init_install_secret() -> Result<Vec<u8>> {
     let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_INSTALL_SECRET)
         .context("creating keychain entry for install secret")?;
     match entry.get_password() {
-        Ok(hex_secret) => {
-            hex::decode(hex_secret).context("decoding install secret from keychain")
-        }
+        Ok(hex_secret) => hex::decode(hex_secret).context("decoding install secret from keychain"),
         Err(keyring::Error::NoEntry) => {
             let mut secret = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut secret);

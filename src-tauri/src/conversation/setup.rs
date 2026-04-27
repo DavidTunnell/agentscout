@@ -1,6 +1,6 @@
 use super::{
     anthropic::{AnthropicClient, CompletionRequest, Message, Role},
-    templates::{find_template, StarterTemplate, STARTER_TEMPLATES},
+    templates::{find_template, STARTER_TEMPLATES},
     Conversation, ConversationKind,
 };
 use anyhow::{anyhow, Result};
@@ -105,10 +105,9 @@ impl SetupConversation {
         let mut messages = self.conversation.messages.clone();
         messages.push(Message {
             role: Role::User,
-            content:
-                "Based on what I've shared, write the final user-profile.md. \
+            content: "Based on what I've shared, write the final user-profile.md. \
                  Output ONLY the markdown — no preamble, no closing remarks."
-                    .to_string(),
+                .to_string(),
         });
         let req = CompletionRequest {
             messages: &messages,
@@ -121,7 +120,8 @@ impl SetupConversation {
         let path = storage_root.join("user-profile.md");
         std::fs::create_dir_all(storage_root)?;
         std::fs::write(&path, &profile_md)?;
-        self.conversation.complete(path.to_string_lossy().to_string());
+        self.conversation
+            .complete(path.to_string_lossy().to_string());
         Ok(path)
     }
 }
@@ -142,7 +142,11 @@ mod tests {
 
         let mock = MockAnthropicClient::new(vec!["Got it — and what's your tech stack?".into()]);
         let reply = s
-            .step("I'm a senior engineer at a small startup.", &mock, "claude-sonnet-4-6")
+            .step(
+                "I'm a senior engineer at a small startup.",
+                &mock,
+                "claude-sonnet-4-6",
+            )
             .await
             .unwrap();
         assert!(reply.contains("tech stack"));

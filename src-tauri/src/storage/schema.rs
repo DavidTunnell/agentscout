@@ -95,11 +95,8 @@ const MIGRATIONS: &[&str] = &[
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
-    conn.execute(
-        "CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)",
-        [],
-    )?;
-
+    // V1 owns schema_version table creation. If the table doesn't exist,
+    // the read errors and we treat the database as version 0.
     let current: u32 = conn
         .query_row(
             "SELECT COALESCE(MAX(version), 0) FROM schema_version",

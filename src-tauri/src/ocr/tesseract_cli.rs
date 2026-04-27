@@ -39,13 +39,19 @@ impl TesseractCliEngine {
     }
 
     pub async fn ensure_traineddata(&self) -> Result<()> {
-        let path = self.tessdata_dir.join(format!("{}.traineddata", self.language));
+        let path = self
+            .tessdata_dir
+            .join(format!("{}.traineddata", self.language));
         if path.exists() {
             debug!("traineddata already present at {}", path.display());
             return Ok(());
         }
 
-        info!("downloading {}.traineddata to {}", self.language, path.display());
+        info!(
+            "downloading {}.traineddata to {}",
+            self.language,
+            path.display()
+        );
         std::fs::create_dir_all(&self.tessdata_dir)
             .with_context(|| format!("creating tessdata dir at {}", self.tessdata_dir.display()))?;
 
@@ -158,7 +164,9 @@ fn which_tesseract() -> Result<PathBuf> {
         }
     }
 
-    Err(anyhow!("tesseract not found in PATH or common install locations"))
+    Err(anyhow!(
+        "tesseract not found in PATH or common install locations"
+    ))
 }
 
 fn which(name: &str) -> Result<PathBuf> {

@@ -7,7 +7,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use anthropic::{AnthropicClient, LiveAnthropicClient, MockAnthropicClient, Message, Role};
+pub use anthropic::{AnthropicClient, LiveAnthropicClient, Message, MockAnthropicClient, Role};
 pub use setup::{SetupConversation, SetupTemplate};
 pub use templates::STARTER_TEMPLATES;
 pub use tier_calibration::TierCalibrationConversation;

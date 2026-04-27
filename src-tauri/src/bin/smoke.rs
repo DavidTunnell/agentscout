@@ -26,7 +26,10 @@ async fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let live = args.iter().any(|a| a == "--live");
 
-    println!("AgentScout smoke test ({})", if live { "live" } else { "mock" });
+    println!(
+        "AgentScout smoke test ({})",
+        if live { "live" } else { "mock" }
+    );
 
     let workdir = std::env::temp_dir().join(format!("as-smoke-{}", uuid::Uuid::new_v4()));
     std::fs::create_dir_all(&workdir)?;
@@ -151,10 +154,7 @@ async fn run_pipeline(workdir: &std::path::Path, live: bool) -> Result<PipelineS
     Ok(PipelineStats {
         captures_recorded: rows.len(),
         ocr_text_chars: ocr_text.len(),
-        ocr_engine: row
-            .ocr_engine
-            .clone()
-            .unwrap_or_else(|| "<none>".into()),
+        ocr_engine: row.ocr_engine.clone().unwrap_or_else(|| "<none>".into()),
         thumbnail_bytes: thumb_bytes.len(),
     })
 }

@@ -1,4 +1,6 @@
-use super::{activity::ActivityMonitor, blocklist::Blocklist, screenshot, screenshot::Screenshotter};
+use super::{
+    activity::ActivityMonitor, blocklist::Blocklist, screenshot, screenshot::Screenshotter,
+};
 use crate::config::{Config, WorkHours};
 use crate::ocr::{generate_thumbnail, OcrEngine, ThumbnailFormat};
 use crate::storage::{crypto::FileCrypto, CaptureRecord, Storage};
@@ -111,8 +113,7 @@ impl Scheduler {
             .screenshotter
             .capture_enabled(&enabled_ids)
             .context("capturing enabled monitors")?;
-        let tiled = screenshot::tile_horizontally(captures)
-            .context("tiling captured monitors")?;
+        let tiled = screenshot::tile_horizontally(captures).context("tiling captured monitors")?;
 
         let png = screenshot::encode_png(&tiled)?;
         let encrypted = self.crypto.encrypt(&png)?;
@@ -163,11 +164,7 @@ impl Scheduler {
             .context("generating budget-mode thumbnail")?;
         let enc_thumb = self.crypto.encrypt(&thumb)?;
         let thumb_filename = format!("{}_thumb.enc", stamp);
-        let thumb_path = self
-            .storage
-            .root()
-            .join("thumbnails")
-            .join(&thumb_filename);
+        let thumb_path = self.storage.root().join("thumbnails").join(&thumb_filename);
         if let Some(parent) = thumb_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -232,7 +229,7 @@ impl Scheduler {
 
 fn current_foreground() -> (Option<String>, Option<String>) {
     match active_win_pos_rs::get_active_window() {
-        Ok(w) => (Some(w.process_name), Some(w.title)),
+        Ok(w) => (Some(w.app_name), Some(w.title)),
         Err(_) => (None, None),
     }
 }
@@ -257,8 +254,7 @@ fn within_work_hours(cfg: &WorkHours, now: DateTime<Local>) -> bool {
     let Ok(end) = NaiveTime::parse_from_str(&cfg.end, "%H:%M") else {
         return true;
     };
-    let cur =
-        NaiveTime::from_hms_opt(now.hour(), now.minute(), now.second()).unwrap_or(start);
+    let cur = NaiveTime::from_hms_opt(now.hour(), now.minute(), now.second()).unwrap_or(start);
     if start <= end {
         cur >= start && cur <= end
     } else {
@@ -283,9 +279,7 @@ mod tests {
                 .collect(),
             timezone: "auto".into(),
         };
-        let tue_noon = Local
-            .with_ymd_and_hms(2026, 4, 21, 12, 0, 0)
-            .unwrap();
+        let tue_noon = Local.with_ymd_and_hms(2026, 4, 21, 12, 0, 0).unwrap();
         assert!(within_work_hours(&cfg, tue_noon));
     }
 
@@ -298,9 +292,7 @@ mod tests {
             days: vec!["Mon"].into_iter().map(String::from).collect(),
             timezone: "auto".into(),
         };
-        let sunday_noon = Local
-            .with_ymd_and_hms(2026, 4, 26, 12, 0, 0)
-            .unwrap();
+        let sunday_noon = Local.with_ymd_and_hms(2026, 4, 26, 12, 0, 0).unwrap();
         assert!(!within_work_hours(&cfg, sunday_noon));
     }
 

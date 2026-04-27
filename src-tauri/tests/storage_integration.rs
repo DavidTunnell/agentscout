@@ -52,7 +52,13 @@ fn update_capture_ocr_writes_text_and_engine() {
         .unwrap();
 
     storage
-        .update_capture_ocr(id, "extracted text", "tesseract-cli", Some("/tmp/thumb.enc"), false)
+        .update_capture_ocr(
+            id,
+            "extracted text",
+            "tesseract-cli",
+            Some("/tmp/thumb.enc"),
+            false,
+        )
         .unwrap();
 
     let rows = storage.list_recent_captures(10).unwrap();

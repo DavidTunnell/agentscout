@@ -80,7 +80,10 @@ async fn full_resolution_capture_persists_encrypted_image_and_db_row() {
     assert_eq!(rows.len(), 1, "exactly one capture should exist");
     let row = &rows[0];
     assert_eq!(row.id, capture_id);
-    assert!(row.thumbnail_path.is_none(), "no thumbnail in non-budget mode");
+    assert!(
+        row.thumbnail_path.is_none(),
+        "no thumbnail in non-budget mode"
+    );
     assert!(row.ocr_text.is_none(), "no OCR text in non-budget mode");
     assert!(
         std::path::Path::new(&row.image_path).exists(),
