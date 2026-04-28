@@ -1,0 +1,68 @@
+name: Mutation testing
+
+on:
+  schedule:
+    # Daily at 09:00 UTC. Mutation testing is slow (10x normal test
+    # runtime) so we don't run it on every push.
+    - cron: '0 9 * * *'
+  workflow_dispatch: {}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  mutants:
+    name: cargo-mutants
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-mutants-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-mutants-
+
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev libxcb1-dev libxrandr-dev \
+            libdbus-1-dev libpipewire-0.3-dev libspa-0.2-dev libgbm-dev \
+            libegl1-mesa-dev libwayland-dev libdrm-dev
+
+      - name: Install cargo-mutants
+        run: cargo install --locked cargo-mutants
+
+      # We focus on the modules whose logic mutations would be most
+      # observable — the analysis pipeline, scoring, and link signer.
+      # Tauri command wiring + Gmail HTTP path drag too much network /
+      # state into the loop to be useful targets here.
+      - name: Run cargo-mutants
+        working-directory: src-tauri
+        run: |
+          cargo mutants --no-shuffle --timeout 240 \
+            --in-place \
+            -F 'src/analysis/.*' -F 'src/email/link_signer.rs' \
+            --test-tool=cargo \
+            -- --skip ocr_goldens \
+          || true
+        continue-on-error: true
+
+      - name: Upload mutants report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mutants-report
+          path: src-tauri/mutants.out
+          retention-days: 14

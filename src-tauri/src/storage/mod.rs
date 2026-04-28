@@ -320,6 +320,92 @@ impl Storage {
             })
         })
     }
+
+    /// List recommendations newest-first, optionally including those
+    /// flagged `suppressed = true`. Used by the review UI Tauri command.
+    pub fn list_recommendations(
+        &self,
+        include_suppressed: bool,
+        limit: u32,
+    ) -> Result<Vec<RecommendationRow>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT id, cycle_id, generated_at, tier_id, name, description,
+                        observed_pattern, frequency_per_week, est_time_saved_minutes,
+                        strategic_value, build_complexity, confidence, score,
+                        suppressed, disposition, disposition_at
+                 FROM recommendations
+                 WHERE (?1 OR suppressed = 0)
+                 ORDER BY suppressed ASC, score DESC
+                 LIMIT ?2",
+            )?;
+            let rows = stmt
+                .query_map(rusqlite::params![include_suppressed, limit], |row| {
+                    Ok(RecommendationRow {
+                        id: row.get(0)?,
+                        cycle_id: row.get(1)?,
+                        generated_at: row.get(2)?,
+                        tier_id: row.get(3)?,
+                        name: row.get(4)?,
+                        description: row.get(5)?,
+                        observed_pattern: row.get(6)?,
+                        frequency_per_week: row.get(7)?,
+                        est_time_saved_minutes: row.get(8)?,
+                        strategic_value: row.get(9)?,
+                        build_complexity: row.get(10)?,
+                        confidence: row.get(11)?,
+                        score: row.get(12)?,
+                        suppressed: row.get::<_, i64>(13)? != 0,
+                        disposition: row.get(14)?,
+                        disposition_at: row.get(15)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
+    /// Persist a disposition for a recommendation. Action must be one of
+    /// `implemented` / `not_interested` / `maybe_later`. Returns Err if
+    /// the action is invalid or the rec_id doesn't exist.
+    pub fn set_disposition(&self, rec_id: &str, action: &str, note: Option<&str>) -> Result<()> {
+        if !matches!(action, "implemented" | "not_interested" | "maybe_later") {
+            anyhow::bail!("unknown disposition action: {action}");
+        }
+        let now = chrono::Utc::now().timestamp();
+        self.with_conn(|c| {
+            let updated = c.execute(
+                "UPDATE recommendations
+                 SET disposition = ?1, disposition_at = ?2, disposition_note = ?3
+                 WHERE id = ?4",
+                rusqlite::params![action, now, note, rec_id],
+            )?;
+            if updated == 0 {
+                anyhow::bail!("no recommendation with id {}", rec_id);
+            }
+            Ok(())
+        })
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RecommendationRow {
+    pub id: String,
+    pub cycle_id: String,
+    pub generated_at: i64,
+    pub tier_id: String,
+    pub name: String,
+    pub description: Option<String>,
+    pub observed_pattern: Option<String>,
+    pub frequency_per_week: Option<f32>,
+    pub est_time_saved_minutes: Option<f32>,
+    pub strategic_value: Option<String>,
+    pub build_complexity: Option<String>,
+    pub confidence: Option<f32>,
+    pub score: Option<f32>,
+    pub suppressed: bool,
+    pub disposition: Option<String>,
+    pub disposition_at: Option<i64>,
 }
 
 #[derive(Debug, Clone)]

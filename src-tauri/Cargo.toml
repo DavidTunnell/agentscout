@@ -85,6 +85,15 @@ thiserror = "1"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "serde"] }
 
+[dev-dependencies]
+wiremock = "0.6"
+criterion = { version = "0.5", features = ["html_reports"] }
+scraper = "0.20"
+
+[[bench]]
+name = "clustering"
+harness = false
+
 [features]
 default = ["custom-protocol"]
 custom-protocol = ["tauri/custom-protocol"]

@@ -289,66 +289,11 @@ struct CaptureImagePayload {
 async fn cmd_list_recommendations(
     state: State<'_, AppState>,
     include_suppressed: Option<bool>,
-) -> Result<Vec<RecommendationView>, String> {
-    let include_suppressed = include_suppressed.unwrap_or(false);
+) -> Result<Vec<crate::storage::RecommendationRow>, String> {
     state
         .storage
-        .with_conn(|c| {
-            let mut stmt = c.prepare(
-                "SELECT id, cycle_id, generated_at, tier_id, name, description,
-                        observed_pattern, frequency_per_week, est_time_saved_minutes,
-                        strategic_value, build_complexity, confidence, score,
-                        suppressed, disposition, disposition_at
-                 FROM recommendations
-                 WHERE (?1 OR suppressed = 0)
-                 ORDER BY suppressed ASC, score DESC
-                 LIMIT 100",
-            )?;
-            let rows = stmt
-                .query_map(rusqlite::params![include_suppressed], |row| {
-                    Ok(RecommendationView {
-                        id: row.get(0)?,
-                        cycle_id: row.get(1)?,
-                        generated_at: row.get(2)?,
-                        tier_id: row.get(3)?,
-                        name: row.get(4)?,
-                        description: row.get(5)?,
-                        observed_pattern: row.get(6)?,
-                        frequency_per_week: row.get(7)?,
-                        est_time_saved_minutes: row.get(8)?,
-                        strategic_value: row.get(9)?,
-                        build_complexity: row.get(10)?,
-                        confidence: row.get(11)?,
-                        score: row.get(12)?,
-                        suppressed: row.get::<_, i64>(13)? != 0,
-                        disposition: row.get(14)?,
-                        disposition_at: row.get(15)?,
-                    })
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            Ok(rows)
-        })
+        .list_recommendations(include_suppressed.unwrap_or(false), 100)
         .map_err(|e| format!("{:#}", e))
-}
-
-#[derive(serde::Serialize)]
-struct RecommendationView {
-    id: String,
-    cycle_id: String,
-    generated_at: i64,
-    tier_id: String,
-    name: String,
-    description: Option<String>,
-    observed_pattern: Option<String>,
-    frequency_per_week: Option<f32>,
-    est_time_saved_minutes: Option<f32>,
-    strategic_value: Option<String>,
-    build_complexity: Option<String>,
-    confidence: Option<f32>,
-    score: Option<f32>,
-    suppressed: bool,
-    disposition: Option<String>,
-    disposition_at: Option<i64>,
 }
 
 #[tauri::command]
@@ -358,27 +303,9 @@ async fn cmd_set_disposition(
     action: String,
     note: Option<String>,
 ) -> Result<(), String> {
-    if !matches!(
-        action.as_str(),
-        "implemented" | "not_interested" | "maybe_later"
-    ) {
-        return Err(format!("unknown disposition action: {action}"));
-    }
-    let now = chrono::Utc::now().timestamp();
     state
         .storage
-        .with_conn(|c| {
-            let updated = c.execute(
-                "UPDATE recommendations
-                 SET disposition = ?1, disposition_at = ?2, disposition_note = ?3
-                 WHERE id = ?4",
-                rusqlite::params![action, now, note, rec_id],
-            )?;
-            if updated == 0 {
-                anyhow::bail!("no recommendation with id {}", rec_id);
-            }
-            Ok(())
-        })
+        .set_disposition(&rec_id, &action, note.as_deref())
         .map_err(|e| format!("{:#}", e))
 }
 

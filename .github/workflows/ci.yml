@@ -88,3 +88,46 @@ jobs:
       - name: cargo audit
         working-directory: src-tauri
         run: cargo audit
+
+  coverage:
+    name: code coverage (llvm-cov)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            src-tauri/target
+          key: ${{ runner.os }}-cov-${{ hashFiles('src-tauri/Cargo.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-cov-
+      - name: Install Linux system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev \
+            librsvg2-dev libssl-dev libxdo-dev libxcb1-dev libxrandr-dev \
+            libdbus-1-dev libpipewire-0.3-dev libspa-0.2-dev libgbm-dev \
+            libegl1-mesa-dev libwayland-dev libdrm-dev tesseract-ocr
+      - name: Install cargo-llvm-cov
+        run: cargo install --locked cargo-llvm-cov
+      - name: Run coverage (lib + integration, skip goldens which need fonts)
+        working-directory: src-tauri
+        run: |
+          cargo llvm-cov --workspace --lcov --output-path lcov.info \
+            -- --skip ocr_goldens
+      - name: Print summary
+        working-directory: src-tauri
+        run: cargo llvm-cov report --workspace -- --skip ocr_goldens
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: lcov-coverage
+          path: src-tauri/lcov.info
+          retention-days: 14

@@ -3,15 +3,33 @@
 //! persisted, email was sent, counter reset, and disposition links
 //! actually flow through to the storage row.
 
-use agentscout::analysis::{run_cycle, OrchestratorDeps};
+use agentscout::analysis::{cluster_captures, run_cycle, ClusterConfig, OrchestratorDeps};
 use agentscout::anthropic::MockAnthropicClient;
 use agentscout::config::Config;
 use agentscout::email::{
     start_disposition_server, DispositionAction, DispositionServerConfig, LinkSigner,
     MockEmailSender,
 };
-use agentscout::storage::{CaptureRecord, Storage};
+use agentscout::storage::{CaptureRecord, CaptureRow, Storage};
 use std::sync::Arc;
+
+/// Build a mock with `(n_clusters)` summary responses + one synthesis
+/// response. Pre-clusters the captures so the response count matches
+/// what the orchestrator will actually call — clustering rules can drop
+/// singleton sessions, so naively provisioning N summaries from N seeded
+/// captures over-counts.
+fn mock_for_captures(captures: &[CaptureRow]) -> MockAnthropicClient {
+    let n_clusters = cluster_captures(captures, ClusterConfig::default()).len();
+    let mut responses: Vec<String> = (0..n_clusters)
+        .map(|i| format!("Cluster {i}: user worked here."))
+        .collect();
+    responses.push(SYNTHESIS_RESPONSE.to_string());
+    MockAnthropicClient::new(responses)
+}
+
+fn list_captures(storage: &Storage) -> Vec<CaptureRow> {
+    storage.list_recent_captures(1000).unwrap()
+}
 
 const TIER_DEFINITIONS: &str = r#"{
   "schema_version": 1,
@@ -78,13 +96,7 @@ async fn full_cycle_persists_recs_sends_email_and_resets_counter() {
     let cycle_id = active.current_cycle_id.clone();
 
     seed_captures(&storage, &cycle_id, 5);
-
-    let summaries: Vec<String> = (0..3)
-        .map(|i| format!("Cluster {i}: user worked here."))
-        .collect();
-    let mut all_responses = summaries;
-    all_responses.push(SYNTHESIS_RESPONSE.to_string());
-    let mock_anthropic = MockAnthropicClient::new(all_responses);
+    let mock_anthropic = mock_for_captures(&list_captures(&storage));
 
     let mock_email = MockEmailSender::new();
     let signer = Arc::new(LinkSigner::new(vec![0xAA; 32]));
@@ -180,10 +192,7 @@ async fn end_to_end_with_real_disposition_server_records_click() {
     .await
     .unwrap();
 
-    let summaries: Vec<String> = (0..3).map(|i| format!("Cluster {i}.")).collect();
-    let mut all_responses = summaries;
-    all_responses.push(SYNTHESIS_RESPONSE.to_string());
-    let mock_anthropic = MockAnthropicClient::new(all_responses);
+    let mock_anthropic = mock_for_captures(&list_captures(&storage));
     let mock_email = MockEmailSender::new();
     let cfg = make_config("user@example.com");
 

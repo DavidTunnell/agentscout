@@ -1,3 +1,44 @@
 {
-  "fixtures": []
+  "fixtures": [
+    {
+      "image": "code-editor-01.png",
+      "expected_text": "fn main Result let cli Cli parse run await Ok"
+    },
+    {
+      "image": "code-editor-02.png",
+      "expected_text": "pub mod commands config analysis use anyhow Result"
+    },
+    {
+      "image": "terminal-01.png",
+      "expected_text": "cargo test workspace running tests commands sync roundtrip config default ok"
+    },
+    {
+      "image": "terminal-02.png",
+      "expected_text": "git status branch main Changes staged commit modified src commands sync tests integration"
+    },
+    {
+      "image": "github-pr-01.png",
+      "expected_text": "Pull requests Open Add zsh completion Bump tokio Refactor sync command"
+    },
+    {
+      "image": "docs-01.png",
+      "expected_text": "rewrote sync logic shipped refactor command changed Previously locked repo entire operation"
+    },
+    {
+      "image": "config-file-01.png",
+      "expected_text": "package name agentscout version edition license MIT"
+    },
+    {
+      "image": "error-output-01.png",
+      "expected_text": "error E0599 method named unwrap_or src capture screenshot rs"
+    },
+    {
+      "image": "settings-panel-01.png",
+      "expected_text": "Capture Settings Cadence minutes Budget mode Off Active hours Cost ceiling per cycle"
+    },
+    {
+      "image": "email-preview-01.png",
+      "expected_text": "AgentScout new agent opportunities Top Recommendations Auto-summarize diffs reviewer notes Frequency week Build complexity Confidence"
+    }
+  ]
 }

@@ -134,6 +134,117 @@ fn directories_created_on_open() {
     drop(storage);
 }
 
+/// Helper for the recommendation tests below. Inserts a row directly so
+/// we don't depend on the analysis pipeline running.
+fn insert_rec(
+    storage: &Storage,
+    cycle_id: &str,
+    name: &str,
+    score: f32,
+    suppressed: bool,
+) -> String {
+    let id = uuid::Uuid::new_v4().to_string();
+    storage
+        .with_conn(|c| {
+            c.execute(
+                "INSERT INTO recommendations
+                 (id, cycle_id, generated_at, tier_id, name, score, suppressed,
+                  description, observed_pattern, build_complexity, confidence)
+                 VALUES (?1, ?2, 0, 'time-reclaimers', ?3, ?4, ?5, 'desc', 'pat', 'low', 0.9)",
+                rusqlite::params![id, cycle_id, name, score, suppressed as i64],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    id
+}
+
+#[test]
+fn list_recommendations_orders_by_score_desc_and_excludes_suppressed_by_default() {
+    let (storage, _) = temp_storage();
+    let id_low = insert_rec(&storage, "c1", "Low score", 10.0, false);
+    let id_high = insert_rec(&storage, "c1", "High score", 100.0, false);
+    let id_supp = insert_rec(&storage, "c1", "Suppressed", 200.0, true);
+
+    let visible = storage.list_recommendations(false, 50).unwrap();
+    let names: Vec<&str> = visible.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, vec!["High score", "Low score"]);
+
+    // Sanity: suppressed appears when included
+    let with_supp = storage.list_recommendations(true, 50).unwrap();
+    assert_eq!(with_supp.len(), 3);
+    // suppressed go to the bottom
+    assert_eq!(with_supp.last().unwrap().name, "Suppressed");
+
+    // and the IDs round-tripped
+    assert!(visible.iter().any(|r| r.id == id_high));
+    assert!(visible.iter().any(|r| r.id == id_low));
+    assert!(!visible.iter().any(|r| r.id == id_supp));
+}
+
+#[test]
+fn list_recommendations_respects_limit() {
+    let (storage, _) = temp_storage();
+    for i in 0..5 {
+        insert_rec(&storage, "c1", &format!("Rec{i}"), i as f32, false);
+    }
+    let rows = storage.list_recommendations(false, 3).unwrap();
+    assert_eq!(rows.len(), 3);
+}
+
+#[test]
+fn set_disposition_updates_row_and_timestamp() {
+    let (storage, _) = temp_storage();
+    let id = insert_rec(&storage, "c1", "Pick me", 42.0, false);
+    storage
+        .set_disposition(&id, "implemented", Some("worked great"))
+        .unwrap();
+
+    let row: (String, Option<String>, Option<i64>) = storage
+        .with_conn(|c| {
+            Ok(c.query_row(
+                "SELECT disposition, disposition_note, disposition_at
+                 FROM recommendations WHERE id = ?1",
+                rusqlite::params![id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?)
+        })
+        .unwrap();
+    assert_eq!(row.0, "implemented");
+    assert_eq!(row.1.as_deref(), Some("worked great"));
+    assert!(row.2.unwrap() > 0);
+}
+
+#[test]
+fn set_disposition_rejects_unknown_action() {
+    let (storage, _) = temp_storage();
+    let id = insert_rec(&storage, "c1", "x", 1.0, false);
+    let result = storage.set_disposition(&id, "delete_forever", None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn set_disposition_errors_on_unknown_rec_id() {
+    let (storage, _) = temp_storage();
+    let result = storage.set_disposition("does-not-exist", "implemented", None);
+    assert!(result.is_err());
+}
+
+#[test]
+fn list_prior_dispositions_returns_only_dispositioned() {
+    let (storage, _) = temp_storage();
+    let id_no = insert_rec(&storage, "c1", "Pending", 10.0, false);
+    let id_yes = insert_rec(&storage, "c1", "Decided", 20.0, false);
+    storage
+        .set_disposition(&id_yes, "not_interested", None)
+        .unwrap();
+
+    let priors = storage.list_prior_dispositions().unwrap();
+    assert_eq!(priors.len(), 1);
+    assert_eq!(priors[0].name, "Decided");
+    let _ = id_no; // referenced for clarity
+}
+
 #[test]
 fn opening_storage_twice_at_same_root_is_safe() {
     let dir = std::env::temp_dir().join(format!("as-reopen-{}", uuid::Uuid::new_v4()));
