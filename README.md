@@ -92,30 +92,85 @@ sqlite3 ~/.local/share/agentscout/database.sqlite \
 
 ## Installation
 
-Binaries for v1 will ship as `.msi` (Windows), `.dmg` (macOS), `.AppImage` and `.deb` (Linux) — see the release page once v1 ships.
+Pre-built installers for each tagged release are published to the
+[Releases page](https://github.com/DavidTunnell/agentscout/releases):
 
-To build from source:
+| Platform | Artifact |
+|---|---|
+| Windows 10/11 (x64) | `.msi` |
+| macOS 11+ (Intel + Apple Silicon) | `.dmg` |
+| Linux (Debian/Ubuntu, x64) | `.deb` |
+| Linux (any glibc x64) | `.AppImage` |
+
+> **macOS gatekeeper note:** unsigned builds will be flagged. Right-click → Open the first time, or run `xattr -d com.apple.quarantine /Applications/AgentScout.app`. Signed/notarized builds will land once the project secures an Apple Developer account.
+>
+> **Windows SmartScreen note:** unsigned builds will trigger SmartScreen. Click "More info" → "Run anyway".
+>
+> **Linux:** the `.deb` installs system-wide. The `.AppImage` is portable — `chmod +x AgentScout-*.AppImage && ./AgentScout-*.AppImage`.
+
+### Required external dependencies
+
+AgentScout shells out to **Tesseract** for OCR when budget mode is enabled. Install once:
+
+| Platform | Command |
+|---|---|
+| Windows | [UB-Mannheim Tesseract installer](https://github.com/UB-Mannheim/tesseract/wiki) |
+| macOS | `brew install tesseract` |
+| Debian/Ubuntu | `sudo apt install tesseract-ocr` |
+| Fedora | `sudo dnf install tesseract` |
+
+Without Tesseract, budget mode falls back to mock OCR (empty text) and you'll see a banner in the Settings page.
+
+### Building from source
 
 ```bash
-# Rust toolchain (1.77+)
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+# 1. Install Rust 1.77+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh    # macOS/Linux
+# Windows: download from https://rustup.rs and use the MSVC toolchain
 
-# Node + Tauri CLI
+# 2. Install Node 20+ and platform-specific Tauri prerequisites
+# https://tauri.app/start/prerequisites/
+
+# 3. Clone + build
+git clone https://github.com/DavidTunnell/agentscout
+cd agentscout
 npm install
 
-# Generate platform icons from a source PNG (one-time, before first build)
+# 4. (Optional) regenerate platform icons from a source PNG
 npm run tauri icon path/to/source-1024.png
 
-# Dev build
-npm run tauri dev
-
-# Release build
-npm run tauri build
+# 5. Dev or release build
+npm run tauri dev      # development
+npm run tauri build    # produces installer in src-tauri/target/release/bundle/
 ```
 
-> **Note:** `src-tauri/icons/` is intentionally not committed in v0.1 — drop in
-> a 1024×1024 source PNG and run the `tauri icon` command above to generate
-> all platform-specific sizes. Final branding assets land in week 6.
+The `Release` GitHub Actions workflow builds installers automatically on
+every `v*.*.*` tag and uploads them as draft release artifacts.
+
+## First-run setup
+
+After install, AgentScout starts paused in your system tray with a default config. To get it doing useful work:
+
+1. **Open the tray menu → "Open window" → Status tab** to confirm it's running.
+2. **Set your Anthropic API key** in `config.json` (see Configuration below). Currently this is manual — a setup conversation lands in v1.1.
+3. **Set up Gmail OAuth** for email delivery — this requires a Google Cloud project with the Gmail API enabled. See [docs/gmail-oauth.md](./docs/gmail-oauth.md) (TODO). Manual fallback: dispose of recommendations directly in the **Recommendations** tab without email.
+4. **Open Settings** to tune cadence, budget mode, models, cost ceiling, and confidence threshold. The cost projection updates live as you change settings.
+5. **Unpause** from the tray menu (or use `Ctrl+Alt+P`). AgentScout will start capturing.
+6. **After ~24 active hours**, a cycle fires automatically and emails you a ranked list. You can also force it from the tray menu (TODO: surface the manual trigger).
+
+## Troubleshooting
+
+**Captures aren't happening** — check the **Status** tab. If "Paused" shows, unpause from the tray. If captures show but app/title are empty on Linux, you're on Wayland — see the Settings banner; foreground titles aren't reliably available.
+
+**OCR is producing empty text** — Tesseract isn't installed or isn't on `PATH`. Install per the table above. Verify with `tesseract --version`.
+
+**Linker error on Linux build** — install the deps listed under "Building from source". `cargo build` errors mentioning `gtk-3` / `webkit2gtk-4.1` / `libgbm` / `libpipewire` mean a missing system package.
+
+**Crash during a tick** — a redacted crash log lands in `<storage>/logs/crash-<timestamp>.log`. Open an issue with the contents; it never gets uploaded automatically.
+
+**Tray icon doesn't appear** — on GNOME you need the [AppIndicator extension](https://extensions.gnome.org/extension/615/appindicator-support/). On older Linux desktops, install `libayatana-appindicator3-1` (Debian/Ubuntu) or equivalent.
+
+**"AgentScout can't be opened because Apple cannot check it for malicious software"** — see the macOS gatekeeper note above.
 
 ## Testing
 

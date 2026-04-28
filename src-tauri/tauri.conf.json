@@ -1,7 +1,7 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AgentScout",
-  "version": "0.1.0",
+  "version": "0.5.0",
   "identifier": "com.agentscout.app",
   "build": {
     "frontendDist": "../src"
@@ -23,7 +23,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["msi", "deb", "appimage", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -33,6 +33,30 @@
     ],
     "category": "Productivity",
     "shortDescription": "Find AI agent opportunities in your daily work",
-    "longDescription": "AgentScout passively observes your work patterns and periodically recommends AI agent opportunities tailored to your role and goals. BYO API keys, fully local storage, encrypted at rest."
+    "longDescription": "AgentScout passively observes your work patterns and periodically recommends AI agent opportunities tailored to your role and goals. BYO API keys, fully local storage, encrypted at rest.",
+    "publisher": "AgentScout Contributors",
+    "homepage": "https://github.com/DavidTunnell/agentscout",
+    "copyright": "Copyright (c) 2026 AgentScout Contributors",
+    "license": "MIT",
+    "windows": {
+      "wix": {
+        "language": "en-US"
+      }
+    },
+    "linux": {
+      "deb": {
+        "depends": [
+          "libwebkit2gtk-4.1-0",
+          "libgtk-3-0",
+          "libayatana-appindicator3-1"
+        ]
+      },
+      "appimage": {
+        "bundleMediaFramework": false
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "11.0"
+    }
   }
 }

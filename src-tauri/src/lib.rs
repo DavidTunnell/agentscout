@@ -489,8 +489,105 @@ fn init_tracing() {
     use tracing_subscriber::{fmt, prelude::*, EnvFilter};
     let filter = EnvFilter::try_from_default_env()
         .unwrap_or_else(|_| EnvFilter::new("info,agentscout=debug"));
-    tracing_subscriber::registry()
-        .with(filter)
-        .with(fmt::layer().with_target(false).compact())
-        .init();
+
+    let stderr_layer = fmt::layer().with_target(false).compact();
+
+    // Daily-rotated log file under <storage>/logs/agentscout.log.<YYYY-MM-DD>.
+    // Best-effort: if we can't resolve the storage dir at boot, skip the
+    // file layer rather than crash. Hold the guard in a OnceLock so the
+    // appender flushes on process exit.
+    let file_layer = match crate::config::storage_root() {
+        Ok(root) => {
+            let log_dir = root.join("logs");
+            if let Err(e) = std::fs::create_dir_all(&log_dir) {
+                eprintln!(
+                    "warning: could not create log dir {}: {e}",
+                    log_dir.display()
+                );
+                None
+            } else {
+                let appender = tracing_appender::rolling::daily(&log_dir, "agentscout.log");
+                let (writer, guard) = tracing_appender::non_blocking(appender);
+                store_log_guard(guard);
+                Some(
+                    fmt::layer()
+                        .with_target(true)
+                        .with_writer(writer)
+                        .with_ansi(false),
+                )
+            }
+        }
+        Err(e) => {
+            eprintln!("warning: could not resolve storage root for logs: {e:#}");
+            None
+        }
+    };
+
+    if let Some(file_layer) = file_layer {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stderr_layer)
+            .with(file_layer)
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(filter)
+            .with(stderr_layer)
+            .init();
+    }
+
+    install_panic_hook();
+}
+
+fn store_log_guard(guard: tracing_appender::non_blocking::WorkerGuard) {
+    use std::sync::OnceLock;
+    static HOLDER: OnceLock<std::sync::Mutex<Option<tracing_appender::non_blocking::WorkerGuard>>> =
+        OnceLock::new();
+    let cell = HOLDER.get_or_init(|| std::sync::Mutex::new(None));
+    *cell.lock().expect("log guard mutex poisoned") = Some(guard);
+}
+
+/// Crash reporter — writes a redacted panic record to
+/// `<storage>/logs/crash-<timestamp>.log` and re-raises the panic so the
+/// process still aborts. Never sends anything off-box per SPEC §10.1.
+fn install_panic_hook() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let payload = info
+            .payload()
+            .downcast_ref::<&str>()
+            .copied()
+            .or_else(|| info.payload().downcast_ref::<String>().map(|s| s.as_str()))
+            .unwrap_or("(non-string panic payload)");
+        let location = info
+            .location()
+            .map(|l| format!("{}:{}", l.file(), l.line()))
+            .unwrap_or_else(|| "(unknown location)".to_string());
+        let when = chrono::Utc::now().to_rfc3339();
+        let record = format!(
+            "AgentScout crash report\n\
+             timestamp: {when}\n\
+             location:  {location}\n\
+             payload:   {payload}\n\
+             \n\
+             This file lives only on your machine. AgentScout never \
+             uploads crash data. Open an issue and attach if you'd like \
+             help triaging: https://github.com/DavidTunnell/agentscout/issues\n"
+        );
+
+        if let Ok(root) = crate::config::storage_root() {
+            let log_dir = root.join("logs");
+            let _ = std::fs::create_dir_all(&log_dir);
+            let safe_when = when.replace(':', "-");
+            let path = log_dir.join(format!("crash-{safe_when}.log"));
+            if let Err(e) = std::fs::write(&path, record.as_bytes()) {
+                eprintln!("(could not write crash log to {}: {e})", path.display());
+            } else {
+                eprintln!("crash log written to {}", path.display());
+            }
+        }
+        eprintln!("{record}");
+
+        prev(info);
+    }));
 }

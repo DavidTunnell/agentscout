@@ -2,7 +2,8 @@
 /src-tauri/target
 /src-tauri/gen/schemas
 **/*.rs.bk
-Cargo.lock
+# Cargo.lock IS committed for reproducible binary builds (we ship binaries, not a library).
+# /src-tauri/fuzz/ is a separate workspace; its lockfile travels with it.
 
 # Node / frontend
 /node_modules
