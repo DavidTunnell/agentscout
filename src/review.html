@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>AgentScout — Recommendations</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="assets/app.css" />
+</head>
+<body>
+  <header>
+    <h1>AgentScout</h1>
+    <nav>
+      <a href="index.html">Status</a>
+      <a href="review.html" class="active">Recommendations</a>
+      <a href="inspector.html">Inspector</a>
+      <a href="settings.html">Settings</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="cycle-status">
+      <h2>Current cycle</h2>
+      <div id="cycle-body" class="muted">Loading...</div>
+    </section>
+
+    <section>
+      <h2>Recommendations</h2>
+      <div class="inspector-controls">
+        <label>
+          <input type="checkbox" id="show-suppressed" />
+          Show below-threshold (suppressed)
+        </label>
+        <button id="refresh-btn" class="secondary">Refresh</button>
+      </div>
+      <div id="rec-list"></div>
+    </section>
+  </main>
+
+  <script type="module" src="assets/review.js"></script>
+</body>
+</html>

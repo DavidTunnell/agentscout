@@ -148,7 +148,29 @@ impl Scheduler {
             }
         }
 
+        // Active-hours counter advances by the cadence on every successful
+        // tick. The orchestrator (week 4 wiring) reads this to decide
+        // when to fire a cycle.
+        let increment_seconds = i64::from(cfg.capture.cadence_minutes) * 60;
+        if let Err(e) = self.storage.add_active_seconds(increment_seconds) {
+            warn!("failed to advance active-hours counter: {:#}", e);
+        }
+
         Ok(TickOutcome::Captured { capture_id: id })
+    }
+
+    /// Read the current active-hours state. The orchestrator and the
+    /// status UI both call this to decide whether to fire / display.
+    pub fn active_hours_state(&self) -> Result<crate::storage::ActiveHoursState> {
+        self.storage.load_active_hours()
+    }
+
+    pub fn storage(&self) -> Arc<Storage> {
+        self.storage.clone()
+    }
+
+    pub fn config(&self) -> Arc<Mutex<Config>> {
+        self.config.clone()
     }
 
     async fn run_budget_pipeline(

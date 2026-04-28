@@ -3,11 +3,13 @@ pub mod anthropic;
 pub mod capture;
 pub mod config;
 pub mod conversation;
+pub mod email;
 pub mod ocr;
 pub mod storage;
 
 use crate::capture::{ActivityMonitor, Scheduler, TickOutcome, XcapScreenshotter};
 use crate::config::Config;
+use crate::email::{start_disposition_server, DispositionServerConfig, LinkSigner, RunningServer};
 use crate::ocr::{MockEngine, OcrEngine, TesseractCliEngine};
 use crate::storage::{crypto::FileCrypto, CaptureRow, Storage};
 use anyhow::Result;
@@ -27,6 +29,8 @@ pub struct AppState {
     pub crypto: Arc<FileCrypto>,
     pub scheduler: Arc<Scheduler>,
     pub paused: Arc<AtomicBool>,
+    pub link_signer: Arc<LinkSigner>,
+    pub disposition_server_origin: String,
 }
 
 pub fn run() {
@@ -43,6 +47,9 @@ pub fn run() {
             cmd_list_recent_captures,
             cmd_get_capture_image,
             cmd_list_starter_templates,
+            cmd_list_recommendations,
+            cmd_set_disposition,
+            cmd_get_cycle_status,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -78,12 +85,28 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
     ));
     let paused = scheduler.pause_handle();
 
+    // Disposition server + HMAC link signer using the per-install secret.
+    let install_secret = crate::storage::crypto::load_or_init_install_secret()?;
+    let link_signer = Arc::new(LinkSigner::new(install_secret));
+    let disposition = start_disposition_server(
+        storage.clone(),
+        link_signer.clone(),
+        DispositionServerConfig::default(),
+    )
+    .await
+    .map_err(|e| anyhow::anyhow!("starting disposition server: {:#}", e))?;
+    let disposition_origin = disposition.origin.clone();
+    info!("disposition server listening at {}", disposition_origin);
+    keep_disposition_server_alive(disposition);
+
     let state = AppState {
         config: config.clone(),
         storage: storage.clone(),
         crypto: crypto.clone(),
         scheduler: scheduler.clone(),
         paused,
+        link_signer,
+        disposition_server_origin: disposition_origin,
     };
 
     build_tray(&app, scheduler.clone())?;
@@ -97,6 +120,16 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
 
     info!("agentscout bootstrap complete");
     Ok(())
+}
+
+/// Move the running disposition server into a static slot so its tokio
+/// task stays alive for the app's lifetime. We never need to read it
+/// back; the server runs until process exit.
+fn keep_disposition_server_alive(server: RunningServer) {
+    use std::sync::OnceLock;
+    static HOLDER: OnceLock<std::sync::Mutex<Option<RunningServer>>> = OnceLock::new();
+    let cell = HOLDER.get_or_init(|| std::sync::Mutex::new(None));
+    *cell.lock().expect("disposition server holder poisoned") = Some(server);
 }
 
 fn build_tray(app: &AppHandle, scheduler: Arc<Scheduler>) -> Result<TrayIcon> {
@@ -250,6 +283,132 @@ struct CaptureImagePayload {
     data_base64: String,
     from_thumbnail: bool,
     ocr_text: Option<String>,
+}
+
+#[tauri::command]
+async fn cmd_list_recommendations(
+    state: State<'_, AppState>,
+    include_suppressed: Option<bool>,
+) -> Result<Vec<RecommendationView>, String> {
+    let include_suppressed = include_suppressed.unwrap_or(false);
+    state
+        .storage
+        .with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT id, cycle_id, generated_at, tier_id, name, description,
+                        observed_pattern, frequency_per_week, est_time_saved_minutes,
+                        strategic_value, build_complexity, confidence, score,
+                        suppressed, disposition, disposition_at
+                 FROM recommendations
+                 WHERE (?1 OR suppressed = 0)
+                 ORDER BY suppressed ASC, score DESC
+                 LIMIT 100",
+            )?;
+            let rows = stmt
+                .query_map(rusqlite::params![include_suppressed], |row| {
+                    Ok(RecommendationView {
+                        id: row.get(0)?,
+                        cycle_id: row.get(1)?,
+                        generated_at: row.get(2)?,
+                        tier_id: row.get(3)?,
+                        name: row.get(4)?,
+                        description: row.get(5)?,
+                        observed_pattern: row.get(6)?,
+                        frequency_per_week: row.get(7)?,
+                        est_time_saved_minutes: row.get(8)?,
+                        strategic_value: row.get(9)?,
+                        build_complexity: row.get(10)?,
+                        confidence: row.get(11)?,
+                        score: row.get(12)?,
+                        suppressed: row.get::<_, i64>(13)? != 0,
+                        disposition: row.get(14)?,
+                        disposition_at: row.get(15)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .map_err(|e| format!("{:#}", e))
+}
+
+#[derive(serde::Serialize)]
+struct RecommendationView {
+    id: String,
+    cycle_id: String,
+    generated_at: i64,
+    tier_id: String,
+    name: String,
+    description: Option<String>,
+    observed_pattern: Option<String>,
+    frequency_per_week: Option<f32>,
+    est_time_saved_minutes: Option<f32>,
+    strategic_value: Option<String>,
+    build_complexity: Option<String>,
+    confidence: Option<f32>,
+    score: Option<f32>,
+    suppressed: bool,
+    disposition: Option<String>,
+    disposition_at: Option<i64>,
+}
+
+#[tauri::command]
+async fn cmd_set_disposition(
+    state: State<'_, AppState>,
+    rec_id: String,
+    action: String,
+    note: Option<String>,
+) -> Result<(), String> {
+    if !matches!(
+        action.as_str(),
+        "implemented" | "not_interested" | "maybe_later"
+    ) {
+        return Err(format!("unknown disposition action: {action}"));
+    }
+    let now = chrono::Utc::now().timestamp();
+    state
+        .storage
+        .with_conn(|c| {
+            let updated = c.execute(
+                "UPDATE recommendations
+                 SET disposition = ?1, disposition_at = ?2, disposition_note = ?3
+                 WHERE id = ?4",
+                rusqlite::params![action, now, note, rec_id],
+            )?;
+            if updated == 0 {
+                anyhow::bail!("no recommendation with id {}", rec_id);
+            }
+            Ok(())
+        })
+        .map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+async fn cmd_get_cycle_status(state: State<'_, AppState>) -> Result<CycleStatusView, String> {
+    let s = state
+        .storage
+        .load_active_hours()
+        .map_err(|e| format!("{:#}", e))?;
+    let cfg = state.config.lock().await;
+    let threshold_seconds = i64::from(cfg.analysis.active_hours_threshold) * 3600;
+    Ok(CycleStatusView {
+        cycle_id: s.current_cycle_id,
+        active_hours: s.active_seconds as f32 / 3600.0,
+        threshold_hours: cfg.analysis.active_hours_threshold,
+        progress_pct: ((s.active_seconds as f64 / threshold_seconds.max(1) as f64) * 100.0)
+            .min(100.0) as f32,
+        cycle_started_at: s.cycle_started_at,
+        disposition_server_origin: state.disposition_server_origin.clone(),
+    })
+}
+
+#[derive(serde::Serialize)]
+struct CycleStatusView {
+    cycle_id: String,
+    active_hours: f32,
+    threshold_hours: u32,
+    progress_pct: f32,
+    cycle_started_at: i64,
+    disposition_server_origin: String,
 }
 
 #[tauri::command]

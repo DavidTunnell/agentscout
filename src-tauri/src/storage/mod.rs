@@ -232,6 +232,97 @@ pub struct PriorDispositionRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct ActiveHoursState {
+    pub active_seconds: i64,
+    pub current_cycle_id: String,
+    pub cycle_started_at: i64,
+}
+
+impl Storage {
+    /// Read or initialize the active-hours counter row. The counter
+    /// table has a single row (id=1) created on first call so we don't
+    /// need a separate migration.
+    pub fn load_active_hours(&self) -> Result<ActiveHoursState> {
+        self.with_conn(|c| {
+            let row: Option<(i64, String, i64)> = c
+                .query_row(
+                    "SELECT active_seconds, current_cycle_id, cycle_started_at
+                     FROM active_hours_counter WHERE id = 1",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+                )
+                .ok();
+            match row {
+                Some((sec, cid, started)) => Ok(ActiveHoursState {
+                    active_seconds: sec,
+                    current_cycle_id: cid,
+                    cycle_started_at: started,
+                }),
+                None => {
+                    let cycle_id = uuid::Uuid::new_v4().to_string();
+                    let now = chrono::Utc::now().timestamp();
+                    c.execute(
+                        "INSERT INTO active_hours_counter
+                         (id, active_seconds, current_cycle_id, cycle_started_at)
+                         VALUES (1, 0, ?1, ?2)",
+                        rusqlite::params![cycle_id, now],
+                    )?;
+                    Ok(ActiveHoursState {
+                        active_seconds: 0,
+                        current_cycle_id: cycle_id,
+                        cycle_started_at: now,
+                    })
+                }
+            }
+        })
+    }
+
+    pub fn add_active_seconds(&self, seconds: i64) -> Result<ActiveHoursState> {
+        let _ = self.load_active_hours()?; // ensure row exists
+        self.with_conn(|c| {
+            c.execute(
+                "UPDATE active_hours_counter
+                 SET active_seconds = active_seconds + ?1
+                 WHERE id = 1",
+                rusqlite::params![seconds],
+            )?;
+            let row: (i64, String, i64) = c.query_row(
+                "SELECT active_seconds, current_cycle_id, cycle_started_at
+                 FROM active_hours_counter WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )?;
+            Ok(ActiveHoursState {
+                active_seconds: row.0,
+                current_cycle_id: row.1,
+                cycle_started_at: row.2,
+            })
+        })
+    }
+
+    /// Reset the counter and start a new cycle ID. Called when a cycle
+    /// completes (after analysis + email) or when the user manually
+    /// triggers a new cycle from the tray menu.
+    pub fn reset_active_hours(&self) -> Result<ActiveHoursState> {
+        self.with_conn(|c| {
+            let cycle_id = uuid::Uuid::new_v4().to_string();
+            let now = chrono::Utc::now().timestamp();
+            c.execute(
+                "INSERT OR REPLACE INTO active_hours_counter
+                 (id, active_seconds, current_cycle_id, cycle_started_at)
+                 VALUES (1, 0, ?1, ?2)",
+                rusqlite::params![cycle_id, now],
+            )?;
+            Ok(ActiveHoursState {
+                active_seconds: 0,
+                current_cycle_id: cycle_id,
+                cycle_started_at: now,
+            })
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct CaptureRecord {
     pub timestamp: i64,
     pub cycle_id: String,

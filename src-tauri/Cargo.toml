@@ -59,6 +59,19 @@ base64 = "0.22"
 # Async traits (for OcrEngine, AnthropicClient)
 async-trait = "0.1"
 
+# HTTP server for the localhost disposition handler (week 4)
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "query"] }
+tower = { version = "0.5", default-features = false }
+
+# OAuth 2.0 with PKCE for Gmail
+oauth2 = { version = "5", default-features = false, features = ["reqwest", "rustls-tls"] }
+
+# Template engine for email rendering
+tera = "1"
+
+# URL-safe encoding for HMAC tokens
+urlencoding = "2"
+
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
