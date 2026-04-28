@@ -198,18 +198,9 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
-    fn engine_construction_fails_gracefully_when_tesseract_missing() {
-        // Save and clear PATH so even any installed tesseract is unreachable
-        let original_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", "");
-        let result = TesseractCliEngine::new(std::env::temp_dir().join("agentscout-test-tessdata"));
-        if let Some(p) = original_path {
-            std::env::set_var("PATH", p);
-        }
-        assert!(
-            result.is_err(),
-            "expected error when tesseract is unavailable, got Ok"
-        );
-    }
+    // Note: a previous "engine_construction_fails_gracefully_when_tesseract_missing"
+    // test cleared PATH and asserted construction errored. It was unreliable
+    // across environments — Linux runners ship `/usr/bin/tesseract` which the
+    // absolute-path fallback in `which_tesseract` finds even with empty PATH.
+    // The underlying primitive is covered by `which_returns_err_for_nonexistent_binary`.
 }

@@ -67,11 +67,15 @@ jobs:
 
       - name: cargo build
         working-directory: src-tauri
-        run: cargo build --all-targets
+        run: cargo build --tests --lib --bins
 
-      - name: cargo test (unit + integration, excludes goldens)
+      - name: cargo test (unit + integration, excludes goldens + benches)
         working-directory: src-tauri
-        run: cargo test --all-targets -- --skip ocr_goldens
+        run: cargo test --tests --lib --bins -- --skip ocr_goldens
+
+      - name: cargo bench --no-run (compile-check only)
+        working-directory: src-tauri
+        run: cargo bench --no-run
 
       - name: smoke (mock pipeline)
         working-directory: src-tauri
@@ -121,10 +125,10 @@ jobs:
         working-directory: src-tauri
         run: |
           cargo llvm-cov --workspace --lcov --output-path lcov.info \
-            -- --skip ocr_goldens
+            --tests --lib --bins -- --skip ocr_goldens
       - name: Print summary
         working-directory: src-tauri
-        run: cargo llvm-cov report --workspace -- --skip ocr_goldens
+        run: cargo llvm-cov report --workspace --tests --lib --bins -- --skip ocr_goldens
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
