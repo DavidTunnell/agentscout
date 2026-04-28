@@ -250,6 +250,19 @@ impl Scheduler {
 }
 
 fn current_foreground() -> (Option<String>, Option<String>) {
+    // On Linux without a graphical session (CI runners, ssh-only servers,
+    // VMs), `active_win_pos_rs::get_active_window()` can hang waiting on
+    // an X11 connection that will never come back. Short-circuit when
+    // there's no DISPLAY/WAYLAND_DISPLAY rather than risk a 6-hour
+    // smoke-test timeout (see CI run 25032226623).
+    #[cfg(target_os = "linux")]
+    {
+        if std::env::var_os("DISPLAY").is_none()
+            && std::env::var_os("WAYLAND_DISPLAY").is_none()
+        {
+            return (None, None);
+        }
+    }
     match active_win_pos_rs::get_active_window() {
         Ok(w) => (Some(w.app_name), Some(w.title)),
         Err(_) => (None, None),
