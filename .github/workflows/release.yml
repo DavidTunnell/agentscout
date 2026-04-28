@@ -86,17 +86,25 @@ jobs:
       - name: npm install (Tauri CLI)
         run: npm install
 
-      - name: tauri build
-        run: npm run tauri -- build --verbose
+      # tauri's macOS bundler tries to sign whenever APPLE_CERTIFICATE
+      # is set, even to an empty string. We split into two steps so the
+      # signing path is only taken when the secret is actually populated.
+      - name: tauri build (signed macOS)
+        if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
         env:
-          # Apple notarization is opt-in via secrets. When absent the
-          # macOS build skips notarization and produces an unsigned dmg.
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+        run: npm run tauri -- build --verbose
+
+      - name: tauri build (unsigned)
+        if: runner.os != 'macOS' || env.APPLE_CERTIFICATE == ''
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+        run: npm run tauri -- build --verbose
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
