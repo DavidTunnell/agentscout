@@ -92,6 +92,14 @@ const MIGRATIONS: &[&str] = &[
 
     INSERT INTO schema_version (version) VALUES (2);
     "#,
+    // V3 — analysis-pipeline columns on recommendations (week 3)
+    r#"
+    ALTER TABLE recommendations ADD COLUMN strategic_value TEXT;
+    ALTER TABLE recommendations ADD COLUMN confidence REAL;
+    ALTER TABLE recommendations ADD COLUMN starter_scaffold TEXT;
+
+    INSERT INTO schema_version (version) VALUES (3);
+    "#,
 ];
 
 pub fn run_migrations(conn: &Connection) -> Result<()> {
@@ -126,7 +134,7 @@ mod tests {
         let version: u32 = conn
             .query_row("SELECT MAX(version) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
 
         let table_count: u32 = conn
             .query_row(

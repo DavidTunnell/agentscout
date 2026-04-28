@@ -1,8 +1,8 @@
 use super::{
-    anthropic::{AnthropicClient, CompletionRequest, Message, Role},
     templates::{find_template, STARTER_TEMPLATES},
     Conversation, ConversationKind,
 };
+use crate::anthropic::{AnthropicClient, CompletionRequest, Message, Role};
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
 
@@ -83,9 +83,10 @@ impl SetupConversation {
             system: Some(SYSTEM_PROMPT),
             model,
             max_tokens: 1024,
+            cache_breakpoint: None,
         };
-        let assistant_reply = client.complete(req).await?;
-        self.conversation.append_assistant(&assistant_reply);
+        let response = client.complete(req).await?;
+        self.conversation.append_assistant(&response.text);
         Ok(self
             .conversation
             .messages
@@ -114,12 +115,13 @@ impl SetupConversation {
             system: Some(SYSTEM_PROMPT),
             model,
             max_tokens: 2048,
+            cache_breakpoint: None,
         };
-        let profile_md = client.complete(req).await?;
+        let response = client.complete(req).await?;
 
         let path = storage_root.join("user-profile.md");
         std::fs::create_dir_all(storage_root)?;
-        std::fs::write(&path, &profile_md)?;
+        std::fs::write(&path, &response.text)?;
         self.conversation
             .complete(path.to_string_lossy().to_string());
         Ok(path)
@@ -132,8 +134,8 @@ pub fn list_templates() -> &'static [super::templates::StarterTemplate] {
 
 #[cfg(test)]
 mod tests {
-    use super::super::anthropic::MockAnthropicClient;
     use super::*;
+    use crate::anthropic::MockAnthropicClient;
 
     #[tokio::test]
     async fn setup_seeds_with_template_and_advances_on_step() {

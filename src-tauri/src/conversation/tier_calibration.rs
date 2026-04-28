@@ -1,8 +1,5 @@
-use super::{
-    anthropic::{AnthropicClient, CompletionRequest, Message, Role},
-    templates::find_template,
-    Conversation, ConversationKind,
-};
+use super::{templates::find_template, Conversation, ConversationKind};
+use crate::anthropic::{AnthropicClient, CompletionRequest, Message, Role};
 use anyhow::{anyhow, Context, Result};
 use std::path::{Path, PathBuf};
 
@@ -58,9 +55,10 @@ impl TierCalibrationConversation {
             system: Some(SYSTEM_PROMPT),
             model,
             max_tokens: 1024,
+            cache_breakpoint: None,
         };
-        let reply = client.complete(req).await?;
-        self.conversation.append_assistant(&reply);
+        let response = client.complete(req).await?;
+        self.conversation.append_assistant(&response.text);
         Ok(self
             .conversation
             .messages
@@ -87,9 +85,10 @@ impl TierCalibrationConversation {
             system: Some(SYSTEM_PROMPT),
             model,
             max_tokens: 2048,
+            cache_breakpoint: None,
         };
-        let raw = client.complete(req).await?;
-        let json = strip_markdown_fence(&raw);
+        let response = client.complete(req).await?;
+        let json = strip_markdown_fence(&response.text);
 
         // Validate before writing — if Claude returned invalid JSON, fail
         // here rather than corrupting the user's tier definitions.
@@ -118,8 +117,8 @@ fn strip_markdown_fence(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::super::anthropic::MockAnthropicClient;
     use super::*;
+    use crate::anthropic::MockAnthropicClient;
 
     #[tokio::test]
     async fn finalize_strips_markdown_fences_and_validates_json() {

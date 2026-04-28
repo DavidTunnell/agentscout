@@ -1,13 +1,12 @@
-pub mod anthropic;
 pub mod setup;
 pub mod templates;
 pub mod tier_calibration;
 
+use crate::anthropic::{Message, Role};
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-pub use anthropic::{AnthropicClient, LiveAnthropicClient, Message, MockAnthropicClient, Role};
 pub use setup::{SetupConversation, SetupTemplate};
 pub use templates::STARTER_TEMPLATES;
 pub use tier_calibration::TierCalibrationConversation;

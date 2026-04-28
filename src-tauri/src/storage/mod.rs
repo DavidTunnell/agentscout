@@ -159,6 +159,78 @@ pub struct CaptureRow {
     pub ocr_engine: Option<String>,
 }
 
+impl Storage {
+    pub fn save_recommendation(&self, rec: &crate::analysis::Recommendation) -> Result<()> {
+        self.with_conn(|c| {
+            c.execute(
+                "INSERT OR REPLACE INTO recommendations (
+                    id, cycle_id, generated_at, tier_id, name, description,
+                    observed_pattern, frequency_per_week, est_time_saved_minutes,
+                    build_complexity, score, supporting_cluster_ids,
+                    disposition, disposition_note, disposition_at,
+                    suppressed, strategic_value, confidence, starter_scaffold
+                 ) VALUES (
+                    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
+                    ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19
+                 )",
+                rusqlite::params![
+                    rec.id.to_string(),
+                    rec.cycle_id,
+                    rec.generated_at,
+                    rec.tier_id,
+                    rec.name,
+                    rec.description,
+                    rec.observed_pattern,
+                    rec.frequency_per_week,
+                    rec.est_time_saved_minutes,
+                    rec.build_complexity,
+                    rec.score,
+                    serde_json::to_string(&rec.supporting_cluster_indices)?,
+                    rec.disposition,
+                    rec.disposition_note,
+                    rec.disposition_at,
+                    rec.suppressed as i64,
+                    rec.strategic_value,
+                    rec.confidence,
+                    rec.starter_scaffold,
+                ],
+            )?;
+            Ok(())
+        })
+    }
+
+    pub fn list_prior_dispositions(&self) -> Result<Vec<PriorDispositionRow>> {
+        self.with_conn(|c| {
+            let mut stmt = c.prepare(
+                "SELECT name, tier_id, disposition, disposition_note
+                 FROM recommendations
+                 WHERE disposition IN ('not_interested', 'implemented', 'maybe_later')
+                 ORDER BY disposition_at DESC
+                 LIMIT 200",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok(PriorDispositionRow {
+                        name: row.get(0)?,
+                        tier_id: row.get(1)?,
+                        disposition: row.get(2)?,
+                        note: row.get(3)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct PriorDispositionRow {
+    pub name: String,
+    pub tier_id: String,
+    pub disposition: String,
+    pub note: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct CaptureRecord {
     pub timestamp: i64,

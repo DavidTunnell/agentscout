@@ -33,3 +33,6 @@ desktop.ini
 *.sqlite
 *.sqlite-journal
 *.enc
+
+# replay-cycle outputs are derived artifacts
+/src-tauri/tests/fixtures/**/output.json

@@ -1,3 +1,5 @@
+pub mod analysis;
+pub mod anthropic;
 pub mod capture;
 pub mod config;
 pub mod conversation;

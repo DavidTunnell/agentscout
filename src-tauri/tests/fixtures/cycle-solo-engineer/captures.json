@@ -1,0 +1,110 @@
+[
+  {
+    "id": 1,
+    "timestamp": 1714000000,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "Code.exe",
+    "foreground_window_title": "main.rs - my-cli - Visual Studio Code",
+    "ocr_text": "fn main() -> Result<()> { let cli = Cli::parse(); cli.run().await",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 2,
+    "timestamp": 1714000300,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "Code.exe",
+    "foreground_window_title": "lib.rs - my-cli - Visual Studio Code",
+    "ocr_text": "pub mod commands; pub mod config; impl Cli { pub async fn run(self) -> Result<()>",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 3,
+    "timestamp": 1714000600,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "Code.exe",
+    "foreground_window_title": "commands/sync.rs - my-cli - Visual Studio Code",
+    "ocr_text": "pub fn sync_remote(opts: SyncOpts) -> Result<()> { for repo in opts.repos",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 4,
+    "timestamp": 1714000900,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "Code.exe",
+    "foreground_window_title": "commands/sync.rs - my-cli - Visual Studio Code",
+    "ocr_text": "git2::Repository::open(&path)? let head = repo.head()?",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 5,
+    "timestamp": 1714001200,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "wezterm-gui.exe",
+    "foreground_window_title": "~/dev/my-cli — wezterm",
+    "ocr_text": "$ cargo test --workspace running 47 tests test commands::sync::tests::roundtrip ... ok",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 6,
+    "timestamp": 1714001500,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "wezterm-gui.exe",
+    "foreground_window_title": "~/dev/my-cli — wezterm",
+    "ocr_text": "$ git status modified: src/commands/sync.rs $ git diff src/commands/sync.rs",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 7,
+    "timestamp": 1714002400,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "chrome.exe",
+    "foreground_window_title": "Pull requests · my-org/my-cli · GitHub",
+    "ocr_text": "5 Open Pull Requests #142 Add zsh completion #138 Bump tokio to 1.42",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 8,
+    "timestamp": 1714002700,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "chrome.exe",
+    "foreground_window_title": "Add zsh completion by jbloom · Pull Request #142",
+    "ocr_text": "Files changed +124 -3 src/completions/zsh.rs Add zsh completion script generation",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 9,
+    "timestamp": 1714003000,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "chrome.exe",
+    "foreground_window_title": "Bump tokio to 1.42 by dependabot · Pull Request #138",
+    "ocr_text": "tokio updated 1.40.0 -> 1.42.0 release notes Files changed Cargo.toml Cargo.lock",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 10,
+    "timestamp": 1714003600,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "Code.exe",
+    "foreground_window_title": "blog-post-draft.md - blog - Visual Studio Code",
+    "ocr_text": "# Why I rewrote my CLI's sync logic Last week I shipped a refactor of the sync command in my-cli",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 11,
+    "timestamp": 1714003900,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "Code.exe",
+    "foreground_window_title": "blog-post-draft.md - blog - Visual Studio Code",
+    "ocr_text": "## What changed Previously the sync function locked the repo for the entire operation",
+    "ocr_engine": "fixture"
+  },
+  {
+    "id": 12,
+    "timestamp": 1714004200,
+    "cycle_id": "fixture-cycle-solo",
+    "foreground_app": "Code.exe",
+    "foreground_window_title": "blog-post-draft.md - blog - Visual Studio Code",
+    "ocr_text": "## The fix I split the operation into a read phase and a write phase",
+    "ocr_engine": "fixture"
+  }
+]

@@ -1,0 +1,14 @@
+[
+  {
+    "name": "Auto-write commit messages from staged diff",
+    "tier_id": "time-reclaimers",
+    "disposition": "not_interested",
+    "note": "I already use conventional commits and prefer to write them by hand"
+  },
+  {
+    "name": "Daily standup summary from yesterday's commits",
+    "tier_id": "time-reclaimers",
+    "disposition": "implemented",
+    "note": "Built a small script using gh CLI two months ago"
+  }
+]

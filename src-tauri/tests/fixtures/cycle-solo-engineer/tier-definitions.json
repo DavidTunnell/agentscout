@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "tiers": [
+    {
+      "id": "time-reclaimers",
+      "name": "Time Reclaimers",
+      "description": "Tactical automation of repetitive or multi-tool workflows",
+      "weight": 1.0,
+      "scoring": "quantitative",
+      "qualitative_multiplier": 100.0,
+      "enabled": true,
+      "example_shapes": [
+        "Repeated sequence of clicks/commands 5+ times per week",
+        "Multi-tool orchestration chains",
+        "Templated communication"
+      ]
+    },
+    {
+      "id": "expertise-amplifiers",
+      "name": "Expertise Amplifiers",
+      "description": "Knowledge capture, team leverage, diagnostic workflows",
+      "weight": 1.2,
+      "scoring": "quantitative",
+      "qualitative_multiplier": 100.0,
+      "enabled": true,
+      "example_shapes": [
+        "Diagnostic patterns applied to recurring issues",
+        "Expertise that lives in one person's head",
+        "Research and synthesis across sources"
+      ]
+    },
+    {
+      "id": "capability-unlocks",
+      "name": "Capability Unlocks",
+      "description": "Strategic opportunities — new offerings or market gaps",
+      "weight": 1.5,
+      "scoring": "qualitative",
+      "qualitative_multiplier": 100.0,
+      "enabled": true,
+      "example_shapes": [
+        "Things currently too manual to be profitable",
+        "Productizable workflows from client delivery",
+        "Team leverage multipliers"
+      ]
+    }
+  ]
+}

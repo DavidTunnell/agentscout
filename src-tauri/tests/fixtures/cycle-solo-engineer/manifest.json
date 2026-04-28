@@ -1,0 +1,8 @@
+{
+  "top_n": 5,
+  "cost_ceiling_usd": 5.0,
+  "confidence_threshold": 0.3,
+  "dedup_similarity_threshold": 0.4,
+  "model_cluster_summary": "claude-sonnet-4-6",
+  "model_synthesis": "claude-opus-4-7"
+}
