@@ -65,17 +65,20 @@ jobs:
         working-directory: src-tauri
         run: cargo clippy --all-targets -- -D warnings
 
+      # Linux OOMs when linking many test binaries in parallel (the
+      # combined deps from Tauri + wiremock + tera + axum + reqwest
+      # + image push past the 7GB runner budget). Cap parallel jobs.
       - name: cargo build
         working-directory: src-tauri
-        run: cargo build --tests --lib --bins
+        run: cargo build --tests --lib --bins --jobs 2
 
       - name: cargo test (unit + integration, excludes goldens + benches)
         working-directory: src-tauri
-        run: cargo test --tests --lib --bins -- --skip ocr_goldens
+        run: cargo test --tests --lib --bins --jobs 2 -- --skip ocr_goldens
 
       - name: cargo bench --no-run (compile-check only)
         working-directory: src-tauri
-        run: cargo bench --no-run
+        run: cargo bench --no-run --jobs 2
 
       - name: smoke (mock pipeline)
         working-directory: src-tauri
