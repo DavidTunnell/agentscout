@@ -166,6 +166,90 @@ pub fn is_pricing_older_than(table: &PricingTable, days: i64) -> bool {
     pricing_table_age_days(table) > days
 }
 
+/// Inputs to project a per-cycle cost without making any API calls.
+/// All fields come from config + observed cluster behavior; the
+/// estimator is a heuristic, intentionally conservative.
+#[derive(Debug, Clone)]
+pub struct ProjectionInput {
+    pub model_cluster_summary: String,
+    pub model_synthesis: String,
+    /// Average cluster count per cycle. Default v1 estimate: 40.
+    pub avg_clusters_per_cycle: u32,
+    /// Average input tokens for one cluster-summary call (system + 1
+    /// user message + OCR text). Default ~1500.
+    pub avg_summary_input_tokens: u32,
+    /// Output token cap configured for cluster summarization. Default 256.
+    pub avg_summary_output_tokens: u32,
+    /// Synthesis input tokens (profile + tier defs + prior dispositions
+    /// + cluster summaries). Default ~14500.
+    pub avg_synthesis_input_tokens: u32,
+    /// Synthesis output cap. Default 4096.
+    pub avg_synthesis_output_tokens: u32,
+}
+
+impl Default for ProjectionInput {
+    fn default() -> Self {
+        Self {
+            model_cluster_summary: "claude-sonnet-4-6".into(),
+            model_synthesis: "claude-opus-4-7".into(),
+            avg_clusters_per_cycle: 40,
+            avg_summary_input_tokens: 1500,
+            avg_summary_output_tokens: 256,
+            avg_synthesis_input_tokens: 14_500,
+            avg_synthesis_output_tokens: 4_096,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CycleProjection {
+    pub stage2_cost_usd: f64,
+    pub stage3_cost_usd: f64,
+    pub total_cost_usd: f64,
+    /// Estimated cycles per month at the configured cadence + active-hours
+    /// threshold (24 active hours = ~3 work days for an 8h/day user, or
+    /// roughly 10 cycles/month).
+    pub estimated_cycles_per_month: f32,
+    pub monthly_cost_usd: f64,
+    pub pricing_age_days: i64,
+    pub pricing_stale: bool,
+}
+
+pub fn project_cycle_cost(
+    table: &PricingTable,
+    input: &ProjectionInput,
+) -> Result<CycleProjection> {
+    let stage2_cost = estimate_cost(
+        table,
+        &input.model_cluster_summary,
+        input.avg_summary_input_tokens * input.avg_clusters_per_cycle,
+        input.avg_summary_output_tokens * input.avg_clusters_per_cycle,
+    )
+    .with_context(|| format!("stage 2 cost for {}", input.model_cluster_summary))?;
+
+    let stage3_cost = estimate_cost(
+        table,
+        &input.model_synthesis,
+        input.avg_synthesis_input_tokens,
+        input.avg_synthesis_output_tokens,
+    )
+    .with_context(|| format!("stage 3 cost for {}", input.model_synthesis))?;
+
+    let total = stage2_cost + stage3_cost;
+    // Heuristic: 24 active-hour cycles for an 8h/day knowledge worker
+    // works out to ~3 work days per cycle, ~10 cycles/month.
+    let monthly_cycles = 10.0;
+    Ok(CycleProjection {
+        stage2_cost_usd: stage2_cost,
+        stage3_cost_usd: stage3_cost,
+        total_cost_usd: total,
+        estimated_cycles_per_month: monthly_cycles,
+        monthly_cost_usd: total * monthly_cycles as f64,
+        pricing_age_days: pricing_table_age_days(table),
+        pricing_stale: is_pricing_stale(table),
+    })
+}
+
 #[allow(dead_code)]
 fn _ensure_chrono_duration_used(d: Duration) -> i64 {
     d.num_seconds()
@@ -259,5 +343,49 @@ mod tests {
         let t = default_pricing_table();
         // Test runs after plan date so age >= 0.
         assert!(pricing_table_age_days(&t) >= 0);
+    }
+
+    #[test]
+    fn projection_uses_both_models_correctly() {
+        let table = default_pricing_table();
+        let input = ProjectionInput::default();
+        let proj = project_cycle_cost(&table, &input).unwrap();
+        // Sonnet stage 2: 40 clusters * 1500 input + 40*256 output
+        // = 60000 input * $3/M + 10240 output * $15/M = 0.18 + 0.1536 = 0.3336
+        assert!(
+            (proj.stage2_cost_usd - 0.3336).abs() < 0.01,
+            "got {}",
+            proj.stage2_cost_usd
+        );
+        // Opus stage 3: 14500 input * $15/M + 4096 output * $75/M = 0.2175 + 0.3072 = 0.5247
+        assert!(
+            (proj.stage3_cost_usd - 0.5247).abs() < 0.01,
+            "got {}",
+            proj.stage3_cost_usd
+        );
+        assert!((proj.total_cost_usd - (proj.stage2_cost_usd + proj.stage3_cost_usd)).abs() < 1e-9);
+        assert!((proj.monthly_cost_usd - proj.total_cost_usd * 10.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn projection_with_haiku_is_cheaper_than_sonnet() {
+        let table = default_pricing_table();
+        let mut input = ProjectionInput::default();
+        let with_sonnet = project_cycle_cost(&table, &input).unwrap();
+        input.model_cluster_summary = "claude-haiku-4-5".into();
+        let with_haiku = project_cycle_cost(&table, &input).unwrap();
+        assert!(with_haiku.total_cost_usd < with_sonnet.total_cost_usd);
+        // Stage 3 (Opus) is unchanged
+        assert!((with_haiku.stage3_cost_usd - with_sonnet.stage3_cost_usd).abs() < 1e-9);
+    }
+
+    #[test]
+    fn projection_errors_on_unknown_model() {
+        let table = default_pricing_table();
+        let input = ProjectionInput {
+            model_synthesis: "claude-fictional-9000".into(),
+            ..Default::default()
+        };
+        assert!(project_cycle_cost(&table, &input).is_err());
     }
 }

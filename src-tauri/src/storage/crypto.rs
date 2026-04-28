@@ -1,14 +1,22 @@
 use aes_gcm::aead::{Aead, KeyInit};
 use aes_gcm::{Aes256Gcm, Key, Nonce};
 use anyhow::{anyhow, Context, Result};
+use hmac::Hmac;
 use keyring::Entry;
 use rand::RngCore;
+use sha2::Sha256;
 use std::path::Path;
 
 const KEYCHAIN_SERVICE: &str = "AgentScout";
 const KEYCHAIN_USER_DEK: &str = "file-dek-v1";
 const KEYCHAIN_USER_INSTALL_SECRET: &str = "install-secret-v1";
+const KEYCHAIN_USER_PASSPHRASE_SALT: &str = "passphrase-salt-v1";
+const KEYCHAIN_USER_WRAPPED_DEK: &str = "wrapped-dek-v1";
 const NONCE_LEN: usize = 12;
+/// PBKDF2 iterations for passphrase derivation. SPEC.md §10.4 calls for
+/// 600k SHA-256 rounds — same as 1Password's published v3 config.
+pub const PBKDF2_ITERATIONS: u32 = 600_000;
+const PBKDF2_SALT_LEN: usize = 16;
 
 pub struct FileCrypto {
     cipher: Aes256Gcm,
@@ -95,6 +103,128 @@ impl FileCrypto {
     }
 }
 
+/// Derive a 32-byte key from a passphrase using PBKDF2-HMAC-SHA256 at
+/// the iteration count specified by SPEC.md §10.4. Salt should come
+/// from `load_or_init_passphrase_salt`. Memory is zeroed before return.
+pub fn derive_key_from_passphrase(passphrase: &str, salt: &[u8]) -> [u8; 32] {
+    let mut key = [0u8; 32];
+    pbkdf2::pbkdf2::<Hmac<Sha256>>(passphrase.as_bytes(), salt, PBKDF2_ITERATIONS, &mut key)
+        .expect("PBKDF2 with valid params should not fail");
+    key
+}
+
+pub fn load_or_init_passphrase_salt() -> Result<Vec<u8>> {
+    let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_PASSPHRASE_SALT)
+        .context("creating keychain entry for passphrase salt")?;
+    match entry.get_password() {
+        Ok(hex_salt) => hex::decode(hex_salt).context("decoding passphrase salt"),
+        Err(keyring::Error::NoEntry) => {
+            let mut salt = [0u8; PBKDF2_SALT_LEN];
+            rand::thread_rng().fill_bytes(&mut salt);
+            entry
+                .set_password(&hex::encode(salt))
+                .context("writing new passphrase salt")?;
+            Ok(salt.to_vec())
+        }
+        Err(e) => Err(anyhow!(e)).context("reading passphrase salt"),
+    }
+}
+
+/// Wrap the file DEK with a passphrase-derived key so it can be stored
+/// outside the keychain (e.g., on a machine without a working keyring).
+/// Returns the wrapped (encrypted) DEK as a base64 string suitable for
+/// storage. The wrapped form is itself an AES-GCM ciphertext.
+pub fn wrap_dek_with_passphrase(dek: &[u8; 32], passphrase: &str) -> Result<String> {
+    let salt = load_or_init_passphrase_salt()?;
+    wrap_dek_with_salt(dek, passphrase, &salt)
+}
+
+/// Test-friendly variant that takes the salt explicitly rather than
+/// pulling it from the keychain. Production code should use
+/// [`wrap_dek_with_passphrase`].
+pub fn wrap_dek_with_salt(dek: &[u8; 32], passphrase: &str, salt: &[u8]) -> Result<String> {
+    let key = derive_key_from_passphrase(passphrase, salt);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let mut nonce_bytes = [0u8; NONCE_LEN];
+    rand::thread_rng().fill_bytes(&mut nonce_bytes);
+    let nonce = Nonce::from_slice(&nonce_bytes);
+    let ciphertext = cipher
+        .encrypt(nonce, dek.as_ref())
+        .map_err(|e| anyhow!("AES-GCM wrap failed: {e}"))?;
+    let mut wrapped = Vec::with_capacity(NONCE_LEN + ciphertext.len());
+    wrapped.extend_from_slice(&nonce_bytes);
+    wrapped.extend_from_slice(&ciphertext);
+    Ok(hex::encode(&wrapped))
+}
+
+pub fn unwrap_dek_with_salt(wrapped_hex: &str, passphrase: &str, salt: &[u8]) -> Result<[u8; 32]> {
+    let wrapped = hex::decode(wrapped_hex).context("decoding wrapped DEK")?;
+    if wrapped.len() < NONCE_LEN + 16 {
+        anyhow::bail!("wrapped DEK is truncated");
+    }
+    let key = derive_key_from_passphrase(passphrase, salt);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let (nonce_bytes, ciphertext) = wrapped.split_at(NONCE_LEN);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let dek_bytes = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| anyhow!("incorrect passphrase or tampered wrapped DEK"))?;
+    if dek_bytes.len() != 32 {
+        anyhow::bail!(
+            "unwrapped DEK has unexpected length {} (expected 32)",
+            dek_bytes.len()
+        );
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&dek_bytes);
+    Ok(out)
+}
+
+pub fn store_wrapped_dek(wrapped_hex: &str) -> Result<()> {
+    let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_WRAPPED_DEK)
+        .context("creating keychain entry for wrapped DEK")?;
+    entry
+        .set_password(wrapped_hex)
+        .context("writing wrapped DEK")
+}
+
+pub fn load_wrapped_dek() -> Result<Option<String>> {
+    let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_WRAPPED_DEK)
+        .context("creating keychain entry for wrapped DEK")?;
+    match entry.get_password() {
+        Ok(s) => Ok(Some(s)),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(anyhow!(e)).context("reading wrapped DEK"),
+    }
+}
+
+/// Reverse of [`wrap_dek_with_passphrase`]. Returns Err on bad
+/// passphrase (the GCM tag check fails), salt missing, or malformed
+/// wrapped blob.
+pub fn unwrap_dek_with_passphrase(wrapped_hex: &str, passphrase: &str) -> Result<[u8; 32]> {
+    let wrapped = hex::decode(wrapped_hex).context("decoding wrapped DEK")?;
+    if wrapped.len() < NONCE_LEN + 16 {
+        anyhow::bail!("wrapped DEK is truncated");
+    }
+    let salt = load_or_init_passphrase_salt()?;
+    let key = derive_key_from_passphrase(passphrase, &salt);
+    let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key));
+    let (nonce_bytes, ciphertext) = wrapped.split_at(NONCE_LEN);
+    let nonce = Nonce::from_slice(nonce_bytes);
+    let dek_bytes = cipher
+        .decrypt(nonce, ciphertext)
+        .map_err(|_| anyhow!("incorrect passphrase or tampered wrapped DEK"))?;
+    if dek_bytes.len() != 32 {
+        anyhow::bail!(
+            "unwrapped DEK has unexpected length {} (expected 32)",
+            dek_bytes.len()
+        );
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&dek_bytes);
+    Ok(out)
+}
+
 pub fn load_or_init_install_secret() -> Result<Vec<u8>> {
     let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_INSTALL_SECRET)
         .context("creating keychain entry for install secret")?;
@@ -151,5 +281,54 @@ mod tests {
         let back = fc.decrypt_from_file(&tmp).unwrap();
         assert_eq!(back, b"some payload");
         std::fs::remove_file(&tmp).ok();
+    }
+
+    #[test]
+    fn pbkdf2_derives_deterministic_key_from_passphrase() {
+        let salt = b"test-salt-1234567";
+        let k1 = derive_key_from_passphrase("hunter2", salt);
+        let k2 = derive_key_from_passphrase("hunter2", salt);
+        assert_eq!(k1, k2);
+        let k3 = derive_key_from_passphrase("hunter3", salt);
+        assert_ne!(k1, k3);
+    }
+
+    #[test]
+    fn pbkdf2_different_salts_yield_different_keys() {
+        let k1 = derive_key_from_passphrase("hunter2", b"salt-a");
+        let k2 = derive_key_from_passphrase("hunter2", b"salt-b");
+        assert_ne!(k1, k2);
+    }
+
+    #[test]
+    fn dek_wrap_unwrap_roundtrip() {
+        let dek = [0xCDu8; 32];
+        let salt = b"test-salt-1234567";
+        let wrapped = wrap_dek_with_salt(&dek, "correct horse", salt).unwrap();
+        let unwrapped = unwrap_dek_with_salt(&wrapped, "correct horse", salt).unwrap();
+        assert_eq!(unwrapped, dek);
+    }
+
+    #[test]
+    fn unwrap_with_wrong_passphrase_fails() {
+        let dek = [0xABu8; 32];
+        let salt = b"test-salt-7654321";
+        let wrapped = wrap_dek_with_salt(&dek, "right", salt).unwrap();
+        let result = unwrap_dek_with_salt(&wrapped, "wrong", salt);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn unwrap_with_wrong_salt_fails() {
+        let dek = [0x77u8; 32];
+        let wrapped = wrap_dek_with_salt(&dek, "passphrase", b"salt-a").unwrap();
+        let result = unwrap_dek_with_salt(&wrapped, "passphrase", b"salt-b");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn truncated_wrapped_dek_fails_cleanly() {
+        let result = unwrap_dek_with_salt("aabbcc", "any", b"salt");
+        assert!(result.is_err());
     }
 }

@@ -10,8 +10,9 @@ pub mod synthesize;
 
 pub use cluster::{cluster_captures, Cluster, ClusterConfig};
 pub use cost::{
-    estimate_request_tokens, pricing_table_age_days, CostCeilingError, CostEstimate, ModelPricing,
-    PricingTable,
+    default_pricing_table, estimate_request_tokens, is_pricing_stale, pricing_table_age_days,
+    project_cycle_cost, CostCeilingError, CostEstimate, CycleProjection, ModelPricing,
+    PricingTable, ProjectionInput,
 };
 pub use orchestrator::{run_cycle, CycleResult, OrchestratorDeps};
 pub use scoring::{

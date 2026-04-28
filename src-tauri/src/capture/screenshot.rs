@@ -19,6 +19,19 @@ pub trait Screenshotter: Send + Sync {
     fn capture_enabled(&self, enabled_ids: &[u32]) -> Result<Vec<MonitorCapture>>;
 }
 
+/// Stable signature describing the current monitor topology — used by
+/// the scheduler to detect hot-plug events between ticks. Two monitor
+/// sets with the same signature are equivalent for capture purposes.
+pub fn monitor_topology_signature(monitors: &[MonitorInfo]) -> String {
+    let mut sorted: Vec<&MonitorInfo> = monitors.iter().collect();
+    sorted.sort_by_key(|m| m.id);
+    sorted
+        .iter()
+        .map(|m| format!("{}:{}x{}@{},{}", m.id, m.width, m.height, m.x, m.y))
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
 pub struct XcapScreenshotter;
 
 impl XcapScreenshotter {
@@ -244,5 +257,46 @@ mod tests {
         let decoded = image::load_from_memory(&bytes).unwrap().to_rgba8();
         assert_eq!(decoded.dimensions(), (20, 20));
         assert_eq!(decoded.get_pixel(0, 0)[0], 10);
+    }
+
+    fn info(id: u32, w: u32, h: u32, x: i32, y: i32) -> MonitorInfo {
+        MonitorInfo {
+            id,
+            name: format!("M{id}"),
+            width: w,
+            height: h,
+            x,
+            y,
+        }
+    }
+
+    #[test]
+    fn topology_signature_stable_across_reorderings() {
+        let a = vec![info(0, 1920, 1080, 0, 0), info(1, 2560, 1440, 1920, 0)];
+        let b = vec![info(1, 2560, 1440, 1920, 0), info(0, 1920, 1080, 0, 0)];
+        assert_eq!(
+            monitor_topology_signature(&a),
+            monitor_topology_signature(&b)
+        );
+    }
+
+    #[test]
+    fn topology_signature_changes_on_hotplug() {
+        let before = vec![info(0, 1920, 1080, 0, 0)];
+        let after = vec![info(0, 1920, 1080, 0, 0), info(1, 2560, 1440, 1920, 0)];
+        assert_ne!(
+            monitor_topology_signature(&before),
+            monitor_topology_signature(&after)
+        );
+    }
+
+    #[test]
+    fn topology_signature_changes_on_resolution_change() {
+        let before = vec![info(0, 1920, 1080, 0, 0)];
+        let after = vec![info(0, 3840, 2160, 0, 0)];
+        assert_ne!(
+            monitor_topology_signature(&before),
+            monitor_topology_signature(&after)
+        );
     }
 }

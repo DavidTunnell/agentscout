@@ -7,5 +7,6 @@ pub use activity::ActivityMonitor;
 pub use blocklist::Blocklist;
 pub use scheduler::{Scheduler, TickOutcome};
 pub use screenshot::{
-    list_monitors, FakeScreenshotter, MonitorInfo, Screenshotter, XcapScreenshotter,
+    list_monitors, monitor_topology_signature, FakeScreenshotter, MonitorInfo, Screenshotter,
+    XcapScreenshotter,
 };

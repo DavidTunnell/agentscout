@@ -24,6 +24,10 @@ pub struct Scheduler {
     screenshotter: Arc<dyn Screenshotter>,
     paused: Arc<AtomicBool>,
     current_cycle_id: Arc<Mutex<String>>,
+    /// Last observed monitor topology signature. When the next tick sees
+    /// a different topology we log it so the user sees hot-plug events
+    /// reflected in their inspector / debug output.
+    last_topology: Arc<Mutex<Option<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,6 +54,7 @@ impl Scheduler {
             screenshotter,
             paused: Arc::new(AtomicBool::new(false)),
             current_cycle_id: Arc::new(Mutex::new(Uuid::new_v4().to_string())),
+            last_topology: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -107,6 +112,27 @@ impl Scheduler {
             let reason = "no_monitors_enabled".to_string();
             self.storage.record_skip(now.timestamp(), &reason)?;
             return Ok(TickOutcome::Skipped { reason });
+        }
+
+        // Re-enumerate every tick — handles hot-plug/HiDPI/resolution
+        // changes that happen between captures.
+        if let Ok(monitors) = self.screenshotter.list_monitors() {
+            let signature = screenshot::monitor_topology_signature(&monitors);
+            let mut last = self.last_topology.lock().await;
+            match last.as_deref() {
+                None => {
+                    info!(
+                        "monitor topology: {} ({} monitors detected)",
+                        signature,
+                        monitors.len()
+                    );
+                }
+                Some(prev) if prev != signature => {
+                    info!("monitor topology changed: {} -> {}", prev, signature);
+                }
+                _ => {}
+            }
+            *last = Some(signature);
         }
 
         let captures = self

@@ -161,6 +161,10 @@ fn js_files_invoke_only_known_tauri_commands() {
         "cmd_list_recommendations",
         "cmd_set_disposition",
         "cmd_get_cycle_status",
+        "cmd_get_cost_projection",
+        "cmd_get_capability_info",
+        "cmd_get_settings",
+        "cmd_update_settings",
     ];
     for js in ["app.js", "review.js", "inspector.js", "settings.js"] {
         let body = read_js(js);

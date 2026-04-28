@@ -2,7 +2,7 @@
 
 > Passively observes how you spend time on your computer and emails you a ranked list of AI agent opportunities tailored to your role and goals.
 
-**Status:** v0.1 — Week 1 scaffolding in place. Capture subsystem is functional on Windows and macOS; Linux is best-effort. OCR, analysis, email delivery, and conversational setup land in weeks 2–5.
+**Status:** v0.5 — Weeks 1-5 done. Capture, OCR + budget mode, analysis pipeline, email + disposition links, cycle orchestrator, cost estimator UI, multi-monitor + Wayland fallback, and encryption-passphrase option are all in place. Installers and final polish ship in week 6.
 
 AgentScout lives in your system tray, captures screenshots at a fixed cadence during active computer use, clusters them by application and context, and periodically synthesizes a prioritized set of recommendations via the Anthropic API. You mark each recommendation as Implemented, Not Interested, or Maybe Later, and that feedback shapes the next cycle.
 
@@ -35,9 +35,60 @@ You can verify network activity with `tcpdump` or Wireshark. The only hosts Agen
   - Windows: `%APPDATA%\AgentScout\`
   - macOS: `~/Library/Application Support/AgentScout/`
   - Linux: `~/.local/share/agentscout/`
-- **Encryption at rest.** Screenshots and thumbnails are encrypted with AES-256-GCM. The key is generated at first launch and stored in the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service).
+- **Encryption at rest.** Screenshots and thumbnails are encrypted with AES-256-GCM. The key is generated at first launch and stored in the OS keychain (Windows Credential Manager, macOS Keychain, Linux Secret Service). For stronger at-rest protection, you can opt into a **passphrase** that wraps the encryption key with PBKDF2-HMAC-SHA256 (600,000 iterations).
 - **Blocklist + pause controls.** Pre-populated blocklist covers password managers, banking domains, and incognito windows. Global pause hotkey (default `Ctrl+Alt+P`). Per-monitor opt-in.
 - **Transparent skips.** Every skipped tick (idle, blocklist, paused, outside work hours) is logged in the local SQLite database so you can audit what AgentScout does and doesn't do.
+- **Disposition links use HMAC-signed tokens.** When you click Implemented / Not Interested / Maybe Later in the email, the URL goes to a localhost server bound to `127.0.0.1` only. The token is signed with a per-install secret kept in the OS keychain. Links are valid for 60 days; expired or tampered links are rejected with a friendly error page.
+
+### Verifying it yourself
+
+The privacy posture is auditable. To verify what AgentScout actually sends:
+
+```bash
+# Linux/macOS — capture only AgentScout's traffic
+sudo tcpdump -i any -A 'host api.anthropic.com or host gmail.googleapis.com or host accounts.google.com'
+
+# Or with Wireshark, set the filter:
+ip.host == api.anthropic.com or ip.host == gmail.googleapis.com or ip.host == accounts.google.com
+```
+
+You should see:
+- One outbound POST per cluster (to `api.anthropic.com/v1/messages`) once per analysis cycle
+- One outbound POST per cycle (to `api.anthropic.com/v1/messages`) for synthesis
+- One outbound POST per cycle (to `gmail.googleapis.com/gmail/v1/users/me/messages/send`)
+- OAuth refresh handshakes (to `oauth2.googleapis.com/token`) when the access token expires (~hourly)
+
+Any other traffic is a bug — please file an issue. AgentScout makes **zero requests on its own behalf**: no telemetry, no error reports, no version checks, no analytics.
+
+To audit the local data:
+
+```bash
+# All captures (encrypted blobs and metadata) live under your platform data dir
+ls ~/.local/share/agentscout/   # Linux
+ls "$LOCALAPPDATA/AgentScout/"  # Windows (PowerShell)
+ls ~/Library/Application\ Support/AgentScout/  # macOS
+
+# The SQLite DB is queryable directly
+sqlite3 ~/.local/share/agentscout/database.sqlite \
+  "SELECT timestamp, foreground_app, foreground_window_title FROM captures
+   ORDER BY timestamp DESC LIMIT 20"
+
+# Skip log shows everything AgentScout chose NOT to capture
+sqlite3 ~/.local/share/agentscout/database.sqlite \
+  "SELECT datetime(timestamp,'unixepoch'), reason FROM skip_log ORDER BY timestamp DESC LIMIT 50"
+```
+
+### Threat model
+
+| Threat | Mitigation |
+|---|---|
+| Accidental capture of sensitive content (passwords, banking, medical, private chats) | Pre-populated blocklist (1Password, KeePass, Bitwarden, LastPass, incognito browsers, banking patterns); manual blocklist additions; pause hotkey; per-monitor opt-in; visible tray indicator |
+| Unauthorized local read of captured screenshots | AES-256-GCM at rest, key in OS keychain (or passphrase-wrapped if opted in) |
+| API key exfiltration | Keys stored only in OS keychain; never written to `config.json` or any file on disk |
+| Malicious screenshot content reaching the API | The Anthropic API sees whatever was on screen at capture. Use blocklist + per-monitor opt-in + pause to control this. AgentScout does not redact content. |
+| Supply chain (dependency compromise) | `cargo audit` runs in CI; minimal dependency set preferred; no postinstall scripts; binaries can be reproduced from the lockfile |
+| Disposition-link forgery | HMAC-signed tokens with 60-day expiry; constant-time signature compare; localhost-only server |
+| Tracking by AgentScout maintainers | None — there is no telemetry, no analytics, no version check, no auto-updater. We literally cannot tell who is using AgentScout. |
 
 ## Installation
 

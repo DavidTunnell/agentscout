@@ -50,6 +50,10 @@ pub fn run() {
             cmd_list_recommendations,
             cmd_set_disposition,
             cmd_get_cycle_status,
+            cmd_get_cost_projection,
+            cmd_get_capability_info,
+            cmd_get_settings,
+            cmd_update_settings,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -336,6 +340,112 @@ struct CycleStatusView {
     progress_pct: f32,
     cycle_started_at: i64,
     disposition_server_origin: String,
+}
+
+#[tauri::command]
+async fn cmd_get_cost_projection(
+    state: State<'_, AppState>,
+) -> Result<crate::analysis::CycleProjection, String> {
+    let cfg = state.config.lock().await;
+    let input = crate::analysis::ProjectionInput {
+        model_cluster_summary: cfg.analysis.model_cluster_summary.clone(),
+        model_synthesis: cfg.analysis.model_synthesis.clone(),
+        ..Default::default()
+    };
+    let table = crate::analysis::default_pricing_table();
+    crate::analysis::project_cycle_cost(&table, &input).map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+async fn cmd_get_capability_info() -> Result<CapabilityInfo, String> {
+    Ok(detect_capabilities())
+}
+
+#[derive(serde::Serialize)]
+struct CapabilityInfo {
+    os: String,
+    /// "x11" | "wayland" | "headless" | "windows" | "macos"
+    session_type: String,
+    /// True when foreground-window detection is reliable on this session.
+    /// Wayland without XDG portal extensions degrades to app-name-only.
+    foreground_detection_reliable: bool,
+    /// Tesseract availability check — true when the binary is on PATH or
+    /// in a known install location.
+    tesseract_available: bool,
+    /// Banner copy to render on first launch when reliability is degraded.
+    /// None when the platform is fine.
+    degraded_notice: Option<String>,
+}
+
+fn detect_capabilities() -> CapabilityInfo {
+    let os = std::env::consts::OS.to_string();
+    let (session_type, reliable, notice) = if cfg!(target_os = "linux") {
+        let display = std::env::var_os("DISPLAY");
+        let wayland = std::env::var_os("WAYLAND_DISPLAY");
+        let xdg = std::env::var("XDG_SESSION_TYPE").unwrap_or_default();
+        if wayland.is_some() || xdg.eq_ignore_ascii_case("wayland") {
+            (
+                "wayland".to_string(),
+                false,
+                Some(
+                    "AgentScout is running on Wayland. Foreground-window titles aren't \
+                     reliably available; clusters will use app names only. For finer \
+                     clustering, log into an X11 session."
+                        .to_string(),
+                ),
+            )
+        } else if display.is_some() || xdg.eq_ignore_ascii_case("x11") {
+            ("x11".to_string(), true, None)
+        } else {
+            (
+                "headless".to_string(),
+                false,
+                Some(
+                    "AgentScout can't see a graphical session. Foreground detection \
+                     is disabled. Captures will still record but won't be tagged with \
+                     window titles."
+                        .to_string(),
+                ),
+            )
+        }
+    } else {
+        let s = if cfg!(target_os = "windows") {
+            "windows"
+        } else if cfg!(target_os = "macos") {
+            "macos"
+        } else {
+            "other"
+        };
+        (s.to_string(), true, None)
+    };
+
+    let tesseract_available =
+        crate::ocr::TesseractCliEngine::new(std::env::temp_dir().join("agentscout-cap-probe"))
+            .is_ok();
+
+    CapabilityInfo {
+        os,
+        session_type,
+        foreground_detection_reliable: reliable,
+        tesseract_available,
+        degraded_notice: notice,
+    }
+}
+
+#[tauri::command]
+async fn cmd_get_settings(state: State<'_, AppState>) -> Result<crate::config::Config, String> {
+    let cfg = state.config.lock().await;
+    Ok(cfg.clone())
+}
+
+#[tauri::command]
+async fn cmd_update_settings(
+    state: State<'_, AppState>,
+    new_config: crate::config::Config,
+) -> Result<(), String> {
+    let mut cfg = state.config.lock().await;
+    *cfg = new_config;
+    cfg.save().map_err(|e| format!("{:#}", e))
 }
 
 #[tauri::command]
