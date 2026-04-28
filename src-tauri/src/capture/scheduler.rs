@@ -257,9 +257,7 @@ fn current_foreground() -> (Option<String>, Option<String>) {
     // smoke-test timeout (see CI run 25032226623).
     #[cfg(target_os = "linux")]
     {
-        if std::env::var_os("DISPLAY").is_none()
-            && std::env::var_os("WAYLAND_DISPLAY").is_none()
-        {
+        if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             return (None, None);
         }
     }

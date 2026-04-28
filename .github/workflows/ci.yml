@@ -128,7 +128,7 @@ jobs:
             --tests --lib --bins -- --skip ocr_goldens
       - name: Print summary
         working-directory: src-tauri
-        run: cargo llvm-cov report --workspace
+        run: cargo llvm-cov report
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
