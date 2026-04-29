@@ -331,3 +331,37 @@ form label.checkbox-label input[type="checkbox"] {
 #save-status {
   margin-left: 12px;
 }
+
+/* v0.5.6 — conversation chat windows */
+.chat-window {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px;
+  max-height: 400px;
+  overflow-y: auto;
+  background: var(--card);
+  font-size: 13px;
+}
+.chat-msg {
+  margin-bottom: 12px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+.chat-msg.assistant {
+  background: rgba(104, 211, 145, 0.08);
+  border-left: 3px solid var(--accent);
+}
+.chat-msg.user {
+  background: rgba(160, 174, 192, 0.10);
+  border-left: 3px solid var(--muted);
+  margin-left: 16px;
+}
+.chat-msg .role-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 4px;
+  letter-spacing: 0.5px;
+}

@@ -48,6 +48,62 @@
       <p id="apikey-result" class="muted" style="margin: 8px 0; min-height: 1.2em;"></p>
     </section>
 
+    <section id="personalization-section">
+      <h2>Personalization (optional but recommended)</h2>
+      <p class="muted">
+        Two short conversations refine how AgentScout interprets your work.
+        Skipping them runs analysis with generic defaults — recommendations
+        will work but be less targeted.
+      </p>
+      <div id="personalization-status" class="muted" style="margin: 8px 0;"></div>
+
+      <h3 style="margin-top: 12px;">Setup conversation</h3>
+      <p class="muted">3–5 turns about your role, work patterns, and goals. Writes <code>user-profile.md</code>.</p>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <select id="setup-template" style="padding: 6px 10px;">
+          <option value="solo-engineer">Solo engineer</option>
+          <option value="startup-engineer">Startup engineer</option>
+          <option value="enterprise-engineer">Enterprise engineer</option>
+          <option value="pm">Product manager</option>
+          <option value="designer">Designer</option>
+          <option value="researcher">Researcher</option>
+          <option value="manager">Manager</option>
+          <option value="custom">Custom (start blank)</option>
+        </select>
+        <button id="setup-start-btn">Start conversation</button>
+        <button id="setup-finalize-btn" hidden>Finalize &amp; write profile</button>
+      </div>
+      <div id="setup-chat" class="chat-window" hidden style="margin-top: 8px;"></div>
+      <div id="setup-input-row" hidden style="display: flex; gap: 8px; margin-top: 8px;">
+        <textarea id="setup-input" rows="2" placeholder="Type your reply..."
+          style="flex: 1; padding: 6px 10px; resize: vertical;"></textarea>
+        <button id="setup-send-btn">Send</button>
+      </div>
+
+      <h3 style="margin-top: 16px;">Tier calibration</h3>
+      <p class="muted">Calibrates how time-saving vs strategic recommendations are weighted. Writes <code>tier-definitions.json</code>.</p>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <select id="tier-template" style="padding: 6px 10px;">
+          <option value="solo-engineer">Solo engineer</option>
+          <option value="startup-engineer">Startup engineer</option>
+          <option value="enterprise-engineer">Enterprise engineer</option>
+          <option value="pm">Product manager</option>
+          <option value="designer">Designer</option>
+          <option value="researcher">Researcher</option>
+          <option value="manager">Manager</option>
+          <option value="custom">Custom</option>
+        </select>
+        <button id="tier-start-btn">Start conversation</button>
+        <button id="tier-finalize-btn" hidden>Finalize &amp; write tiers</button>
+      </div>
+      <div id="tier-chat" class="chat-window" hidden style="margin-top: 8px;"></div>
+      <div id="tier-input-row" hidden style="display: flex; gap: 8px; margin-top: 8px;">
+        <textarea id="tier-input" rows="2" placeholder="Type your reply..."
+          style="flex: 1; padding: 6px 10px; resize: vertical;"></textarea>
+        <button id="tier-send-btn">Send</button>
+      </div>
+    </section>
+
     <section>
       <h2>Cost projection</h2>
       <div id="cost-body" class="muted">Loading...</div>

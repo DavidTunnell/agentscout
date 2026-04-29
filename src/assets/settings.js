@@ -215,7 +215,159 @@ document.getElementById("apikey-input")?.addEventListener("keydown", (e) => {
   }
 });
 
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.6 — Setup + Tier Calibration conversations
+// ───────────────────────────────────────────────────────────────────────
+
+function appendChatMessage(windowEl, role, text) {
+  const div = document.createElement("div");
+  div.className = `chat-msg ${role}`;
+  const roleLabel = document.createElement("div");
+  roleLabel.className = "role-label";
+  roleLabel.textContent = role === "assistant" ? "AgentScout" : "You";
+  const body = document.createElement("div");
+  body.textContent = text;
+  div.appendChild(roleLabel);
+  div.appendChild(body);
+  windowEl.appendChild(div);
+  windowEl.scrollTop = windowEl.scrollHeight;
+}
+
+async function refreshPersonalizationStatus() {
+  if (!invoke) return;
+  const el = document.getElementById("personalization-status");
+  if (!el) return;
+  try {
+    const p = await invoke("cmd_get_personalization_status");
+    const lines = [];
+    lines.push(
+      p.has_user_profile
+        ? '<span style="color:#16a34a;">&#10003; user-profile.md exists</span>'
+        : '<span style="color:#a16207;">&#9888; user-profile.md not generated yet</span>'
+    );
+    lines.push(
+      p.has_tier_definitions
+        ? '<span style="color:#16a34a;">&#10003; tier-definitions.json exists</span>'
+        : '<span style="color:#a16207;">&#9888; tier-definitions.json not generated yet</span>'
+    );
+    if (p.user_profile_excerpt) {
+      lines.push(
+        `<details style="margin-top: 8px;"><summary class="muted">Profile preview</summary>` +
+        `<pre style="white-space: pre-wrap; font-size: 12px; padding: 8px; background: var(--card); border-radius: 4px;">${escapeHtml(p.user_profile_excerpt)}...</pre></details>`
+      );
+    }
+    el.innerHTML = lines.join("<br>");
+  } catch (e) {
+    el.textContent = `Status check failed: ${e}`;
+  }
+}
+
+function escapeHtml(s) {
+  return (s || "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+// Generic chat-conversation wiring used for both setup and tier-cal.
+function wireConversation(opts) {
+  const startBtn = document.getElementById(opts.startBtnId);
+  const sendBtn = document.getElementById(opts.sendBtnId);
+  const finalizeBtn = document.getElementById(opts.finalizeBtnId);
+  const inputEl = document.getElementById(opts.inputId);
+  const inputRow = document.getElementById(opts.inputRowId);
+  const chatEl = document.getElementById(opts.chatId);
+  const templateSel = document.getElementById(opts.templateSelId);
+
+  startBtn?.addEventListener("click", async () => {
+    if (!invoke) return;
+    chatEl.innerHTML = "";
+    chatEl.hidden = false;
+    inputRow.hidden = false;
+    finalizeBtn.hidden = false;
+    startBtn.disabled = true;
+    try {
+      const opener = await invoke(opts.startCmd, { templateId: templateSel.value });
+      appendChatMessage(chatEl, "assistant", opener);
+    } catch (e) {
+      appendChatMessage(chatEl, "assistant", `Failed to start: ${e}`);
+      startBtn.disabled = false;
+    }
+  });
+
+  async function send() {
+    if (!invoke) return;
+    const reply = inputEl.value.trim();
+    if (!reply) return;
+    appendChatMessage(chatEl, "user", reply);
+    inputEl.value = "";
+    sendBtn.disabled = true;
+    try {
+      const step = await invoke(opts.continueCmd, { reply });
+      appendChatMessage(chatEl, "assistant", step.bot_message);
+    } catch (e) {
+      appendChatMessage(chatEl, "assistant", `Error: ${e}`);
+    } finally {
+      sendBtn.disabled = false;
+      inputEl.focus();
+    }
+  }
+
+  sendBtn?.addEventListener("click", send);
+  inputEl?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      send();
+    }
+  });
+
+  finalizeBtn?.addEventListener("click", async () => {
+    if (!invoke) return;
+    finalizeBtn.disabled = true;
+    appendChatMessage(chatEl, "user", "(finalize and write the file)");
+    try {
+      const path = await invoke(opts.finalizeCmd);
+      appendChatMessage(chatEl, "assistant", `&#10003; Wrote ${path}. You can re-run this conversation any time.`);
+      // Reset for re-run
+      startBtn.disabled = false;
+      finalizeBtn.disabled = true;
+      finalizeBtn.hidden = true;
+      inputRow.hidden = true;
+      refreshPersonalizationStatus();
+    } catch (e) {
+      appendChatMessage(chatEl, "assistant", `Finalize failed: ${e}`);
+      finalizeBtn.disabled = false;
+    }
+  });
+}
+
+wireConversation({
+  startBtnId: "setup-start-btn",
+  sendBtnId: "setup-send-btn",
+  finalizeBtnId: "setup-finalize-btn",
+  inputId: "setup-input",
+  inputRowId: "setup-input-row",
+  chatId: "setup-chat",
+  templateSelId: "setup-template",
+  startCmd: "cmd_start_setup_conversation",
+  continueCmd: "cmd_continue_setup_conversation",
+  finalizeCmd: "cmd_finalize_setup_conversation",
+});
+
+wireConversation({
+  startBtnId: "tier-start-btn",
+  sendBtnId: "tier-send-btn",
+  finalizeBtnId: "tier-finalize-btn",
+  inputId: "tier-input",
+  inputRowId: "tier-input-row",
+  chatId: "tier-chat",
+  templateSelId: "tier-template",
+  startCmd: "cmd_start_tier_calibration",
+  continueCmd: "cmd_continue_tier_calibration",
+  finalizeCmd: "cmd_finalize_tier_calibration",
+});
+
 loadCapability();
 loadCost();
 loadSettings();
 refreshApiKeyStatus();
+refreshPersonalizationStatus();

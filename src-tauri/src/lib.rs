@@ -36,6 +36,11 @@ pub struct AppState {
     pub paused: Arc<AtomicBool>,
     pub link_signer: Arc<LinkSigner>,
     pub disposition_server_origin: String,
+    /// In-progress setup conversation. v0.5.6 — held in memory; if the
+    /// app restarts mid-conversation the user re-opens the wizard and
+    /// starts over (conversations are 3-5 turns max so this is cheap).
+    pub setup_conv: Arc<Mutex<Option<crate::conversation::SetupConversation>>>,
+    pub tier_calib_conv: Arc<Mutex<Option<crate::conversation::TierCalibrationConversation>>>,
 }
 
 pub fn run() {
@@ -65,6 +70,14 @@ pub fn run() {
             cmd_clear_anthropic_key,
             cmd_get_credentials_status,
             cmd_run_cycle_now,
+            // v0.5.6: setup + tier-calibration conversations
+            cmd_start_setup_conversation,
+            cmd_continue_setup_conversation,
+            cmd_finalize_setup_conversation,
+            cmd_start_tier_calibration,
+            cmd_continue_tier_calibration,
+            cmd_finalize_tier_calibration,
+            cmd_get_personalization_status,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -122,6 +135,8 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
         paused,
         link_signer,
         disposition_server_origin: disposition_origin,
+        setup_conv: Arc::new(Mutex::new(None)),
+        tier_calib_conv: Arc::new(Mutex::new(None)),
     };
 
     build_tray(&app, scheduler.clone())?;
@@ -680,6 +695,217 @@ async fn cmd_run_cycle_now(
         n_suppressed: result.n_suppressed,
         estimated_cost_usd: result.estimated_cost_usd,
         email_sent: result.email_message_id.is_some(),
+    })
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.6 — setup + tier-calibration conversations
+// ───────────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct ConversationStep {
+    /// Latest assistant message (the question or wrap-up text shown to
+    /// the user).
+    bot_message: String,
+    /// Total turns in conversation history (assistant + user combined).
+    turn_count: usize,
+}
+
+#[derive(serde::Serialize)]
+struct PersonalizationStatus {
+    has_user_profile: bool,
+    has_tier_definitions: bool,
+    user_profile_excerpt: Option<String>,
+}
+
+/// Build a `LiveAnthropicClient` from the keychain. Shared helper for
+/// every conversation cmd (and `cmd_run_cycle_now`). Returns the
+/// "no key set" error string the UI shows verbatim.
+fn build_live_anthropic() -> Result<LiveAnthropicClient, String> {
+    let key = crate::secrets::get_anthropic_key()
+        .map_err(|e| format!("reading api key: {:#}", e))?
+        .ok_or_else(|| {
+            "No Anthropic API key set. Open Settings → paste your key → Save first.".to_string()
+        })?;
+    Ok(LiveAnthropicClient::new(key))
+}
+
+/// Initial bot message for the setup wizard's "what's your role"
+/// conversation. Resets any in-progress conversation; the wizard
+/// always starts fresh.
+#[tauri::command]
+async fn cmd_start_setup_conversation(
+    state: State<'_, AppState>,
+    template_id: String,
+) -> Result<String, String> {
+    let conv = crate::conversation::SetupConversation::new(&template_id)
+        .map_err(|e| format!("{:#}", e))?;
+    let opener = conv
+        .conversation
+        .messages
+        .last()
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+    let mut slot = state.setup_conv.lock().await;
+    *slot = Some(conv);
+    Ok(opener)
+}
+
+#[tauri::command]
+async fn cmd_continue_setup_conversation(
+    state: State<'_, AppState>,
+    reply: String,
+) -> Result<ConversationStep, String> {
+    let client = build_live_anthropic()?;
+    let model = {
+        let cfg = state.config.lock().await;
+        cfg.analysis.model_cluster_summary.clone()
+    };
+
+    let mut slot = state.setup_conv.lock().await;
+    let conv = slot
+        .as_mut()
+        .ok_or_else(|| "No active setup conversation. Click Start first.".to_string())?;
+    let msg = conv
+        .step(&reply, &client, &model)
+        .await
+        .map_err(|e| format!("{:#}", e))?
+        .to_string();
+    let turn_count = conv.conversation.messages.len();
+    Ok(ConversationStep {
+        bot_message: msg,
+        turn_count,
+    })
+}
+
+#[tauri::command]
+async fn cmd_finalize_setup_conversation(state: State<'_, AppState>) -> Result<String, String> {
+    let client = build_live_anthropic()?;
+    let model = {
+        let cfg = state.config.lock().await;
+        cfg.analysis.model_synthesis.clone()
+    };
+    let storage_root = state.storage.root().to_path_buf();
+
+    let mut slot = state.setup_conv.lock().await;
+    let conv = slot
+        .as_mut()
+        .ok_or_else(|| "No active setup conversation to finalize.".to_string())?;
+
+    let path = conv
+        .finalize(&client, &model, &storage_root)
+        .await
+        .map_err(|e| format!("{:#}", e))?;
+
+    // Clear the slot — finalize() consumed the conversation.
+    *slot = None;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn cmd_start_tier_calibration(
+    state: State<'_, AppState>,
+    template_id: String,
+) -> Result<String, String> {
+    // Tier calibration needs the user-profile.md. Fail loudly with a
+    // clear message if the user skipped setup conversation.
+    let storage_root = state.storage.root().to_path_buf();
+    let user_profile_md =
+        std::fs::read_to_string(storage_root.join("user-profile.md")).map_err(|_| {
+            "Tier calibration needs a user-profile.md first. Run setup conversation \
+             above, then come back."
+                .to_string()
+        })?;
+    let conv =
+        crate::conversation::TierCalibrationConversation::new(&template_id, &user_profile_md)
+            .map_err(|e| format!("{:#}", e))?;
+    let opener = conv
+        .conversation
+        .messages
+        .last()
+        .map(|m| m.content.clone())
+        .unwrap_or_default();
+    let mut slot = state.tier_calib_conv.lock().await;
+    *slot = Some(conv);
+    Ok(opener)
+}
+
+#[tauri::command]
+async fn cmd_continue_tier_calibration(
+    state: State<'_, AppState>,
+    reply: String,
+) -> Result<ConversationStep, String> {
+    let client = build_live_anthropic()?;
+    let model = {
+        let cfg = state.config.lock().await;
+        cfg.analysis.model_cluster_summary.clone()
+    };
+
+    let mut slot = state.tier_calib_conv.lock().await;
+    let conv = slot
+        .as_mut()
+        .ok_or_else(|| "No active tier-calibration conversation. Click Start first.".to_string())?;
+    let msg = conv
+        .step(&reply, &client, &model)
+        .await
+        .map_err(|e| format!("{:#}", e))?
+        .to_string();
+    let turn_count = conv.conversation.messages.len();
+    Ok(ConversationStep {
+        bot_message: msg,
+        turn_count,
+    })
+}
+
+#[tauri::command]
+async fn cmd_finalize_tier_calibration(state: State<'_, AppState>) -> Result<String, String> {
+    let client = build_live_anthropic()?;
+    let model = {
+        let cfg = state.config.lock().await;
+        cfg.analysis.model_synthesis.clone()
+    };
+    let storage_root = state.storage.root().to_path_buf();
+
+    let mut slot = state.tier_calib_conv.lock().await;
+    let conv = slot
+        .as_mut()
+        .ok_or_else(|| "No active tier-calibration conversation to finalize.".to_string())?;
+
+    let path = conv
+        .finalize(&client, &model, &storage_root)
+        .await
+        .map_err(|e| format!("{:#}", e))?;
+
+    *slot = None;
+
+    Ok(path.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn cmd_get_personalization_status(
+    state: State<'_, AppState>,
+) -> Result<PersonalizationStatus, String> {
+    let storage_root = state.storage.root().to_path_buf();
+    let profile_path = storage_root.join("user-profile.md");
+    let tiers_path = storage_root.join("tier-definitions.json");
+
+    let has_user_profile = profile_path.exists();
+    let has_tier_definitions = tiers_path.exists();
+
+    // First 280 chars of profile as a preview for the UI.
+    let user_profile_excerpt = if has_user_profile {
+        std::fs::read_to_string(&profile_path)
+            .ok()
+            .map(|s| s.chars().take(280).collect::<String>())
+    } else {
+        None
+    };
+
+    Ok(PersonalizationStatus {
+        has_user_profile,
+        has_tier_definitions,
+        user_profile_excerpt,
     })
 }
 
