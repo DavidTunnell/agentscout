@@ -165,6 +165,12 @@ fn js_files_invoke_only_known_tauri_commands() {
         "cmd_get_capability_info",
         "cmd_get_settings",
         "cmd_update_settings",
+        // v0.5.5
+        "cmd_set_anthropic_key",
+        "cmd_test_anthropic_key",
+        "cmd_clear_anthropic_key",
+        "cmd_get_credentials_status",
+        "cmd_run_cycle_now",
     ];
     for js in ["app.js", "review.js", "inspector.js", "settings.js"] {
         let body = read_js(js);

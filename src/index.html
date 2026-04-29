@@ -18,13 +18,41 @@
   </header>
 
   <main>
+    <section id="setup-card">
+      <h2>Setup status</h2>
+      <div id="setup-body" class="muted">Loading setup status...</div>
+    </section>
+
     <section id="status-card">
-      <h2>Status</h2>
+      <h2>Capture</h2>
       <div id="status-body">Loading...</div>
       <div class="actions">
         <button id="toggle-pause">Pause capture</button>
         <button id="tick-now">Capture now</button>
       </div>
+    </section>
+
+    <section id="run-cycle-card">
+      <h2>Run analysis now</h2>
+      <p class="muted">
+        Triggers one analysis cycle on captures from the selected window.
+        Recommendations land in the
+        <a href="review.html">Recommendations</a> tab. Email is sent only
+        if Gmail is connected (Settings).
+      </p>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0;">
+        <label>
+          Captures from last
+          <select id="cycle-hours">
+            <option value="1">1 hour</option>
+            <option value="4" selected>4 hours</option>
+            <option value="8">8 hours</option>
+            <option value="24">24 hours</option>
+          </select>
+        </label>
+        <button id="run-cycle-btn">Run analysis now</button>
+      </div>
+      <p id="run-cycle-result" class="muted" style="min-height: 1.2em;"></p>
     </section>
 
     <section id="recent">

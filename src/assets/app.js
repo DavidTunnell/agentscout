@@ -39,5 +39,66 @@ document.getElementById("tick-now")?.addEventListener("click", async () => {
   refreshStatus();
 });
 
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.5 — Setup-status badge + on-demand run cycle
+// ───────────────────────────────────────────────────────────────────────
+
+async function refreshSetupBadge() {
+  const body = document.getElementById("setup-body");
+  if (!body || !invoke) return;
+  try {
+    const c = await invoke("cmd_get_credentials_status");
+    const items = [];
+    items.push(
+      c.has_anthropic_key
+        ? '<span style="color:#16a34a;">&#10003; Anthropic API key set</span>'
+        : '<span style="color:#dc2626;">&#10007; Anthropic API key NOT set — open Settings → paste key → Save before running analysis.</span>'
+    );
+    items.push(
+      c.has_gmail_oauth
+        ? '<span style="color:#16a34a;">&#10003; Gmail connected</span>'
+        : '<span style="color:#a16207;">&#9888; Gmail not connected (analysis runs locally; no email sent). Wired in v0.5.7.</span>'
+    );
+    if (c.recipient_email) {
+      items.push(`<span class="muted">Recipient: ${c.recipient_email}</span>`);
+    }
+    body.innerHTML = items.map((i) => `<div>${i}</div>`).join("");
+  } catch (e) {
+    body.textContent = `Setup status check failed: ${e}`;
+  }
+}
+
+async function runCycleNow() {
+  if (!invoke) return;
+  const btn = document.getElementById("run-cycle-btn");
+  const result = document.getElementById("run-cycle-result");
+  const hoursSel = document.getElementById("cycle-hours");
+  const hours = parseInt(hoursSel.value, 10);
+
+  btn.disabled = true;
+  result.textContent = "Running cycle (this calls Anthropic; may take 30-90s)...";
+  try {
+    const r = await invoke("cmd_run_cycle_now", { hoursBack: hours });
+    const sentNote = r.email_sent ? " (email sent)" : "";
+    result.innerHTML = `
+      <span style="color:#16a34a;">&#10003;</span>
+      Cycle <code>${r.cycle_id}</code> done — analyzed ${r.n_captures} captures in
+      ${r.n_clusters} clusters, produced <strong>${r.n_visible}</strong> visible
+      recommendation${r.n_visible === 1 ? "" : "s"}
+      (${r.n_suppressed} suppressed) for $${r.estimated_cost_usd.toFixed(4)}${sentNote}.
+      <a href="review.html">Open Recommendations →</a>
+    `;
+  } catch (e) {
+    result.innerHTML = `<span style="color:#dc2626;">Cycle failed: ${e}</span>`;
+  } finally {
+    btn.disabled = false;
+    refreshSetupBadge();
+  }
+}
+
+document.getElementById("run-cycle-btn")?.addEventListener("click", runCycleNow);
+
 refreshStatus();
+refreshSetupBadge();
 setInterval(refreshStatus, 5000);
+setInterval(refreshSetupBadge, 30000);

@@ -28,15 +28,24 @@ use tracing::{info, warn};
 /// One end-to-end run, parameterized by the dependencies it needs. All
 /// three trait objects are injected so this function is testable with
 /// mocks (no live API, no real email).
+///
+/// `email` and `gmail_access_token` are `Option` so the cycle can run in
+/// "analysis-only" mode (recommendations land in DB and render in the
+/// Recommendations tab, no email is sent). v0.5.5 ships this mode for
+/// users who haven't connected Gmail yet; v0.5.7 adds Gmail OAuth and
+/// users opt back into email delivery.
 pub struct OrchestratorDeps<'a> {
     pub config: &'a Config,
     pub storage: Arc<Storage>,
     pub anthropic: &'a dyn AnthropicClient,
-    pub email: &'a dyn EmailSender,
+    /// `None` skips the email render+send step entirely. `Some(sender)`
+    /// requires `gmail_access_token` to also be `Some`, plus a recipient
+    /// configured in `config.email`.
+    pub email: Option<&'a dyn EmailSender>,
     pub link_signer: Arc<LinkSigner>,
-    /// OAuth access token to authorize the Gmail send call. Pass empty
-    /// string for the mock email sender.
-    pub gmail_access_token: String,
+    /// OAuth access token to authorize the Gmail send call. Required when
+    /// `email` is `Some`. Pass `None` for analysis-only mode.
+    pub gmail_access_token: Option<String>,
     /// "http://127.0.0.1:<port>" — used to build email action links.
     pub server_origin: String,
     pub user_profile_md: String,
@@ -147,38 +156,54 @@ pub async fn run_cycle(deps: OrchestratorDeps<'_>) -> Result<CycleResult> {
     let n_visible = recs.iter().filter(|r| !r.suppressed).count();
     let n_suppressed = recs.iter().filter(|r| r.suppressed).count();
 
-    // Render + send the email.
-    let rendered = render_for_cycle(
-        &recs,
-        &input,
-        captures.len() as u32,
-        total_cost,
-        &cycle_id,
-        deps.server_origin.clone(),
-        deps.link_signer.clone(),
-    )?;
-    let recipient = deps
-        .config
-        .email
-        .recipient
-        .as_deref()
-        .or(deps.config.email.gmail_account.as_deref())
-        .ok_or_else(|| anyhow!("no email recipient configured"))?;
-    let from = deps
-        .config
-        .email
-        .gmail_account
-        .as_deref()
-        .ok_or_else(|| anyhow!("no Gmail account configured"))?;
-
-    let message_id = match deps
-        .email
-        .send(&deps.gmail_access_token, from, recipient, &rendered)
-        .await
-    {
-        Ok(id) => Some(id),
-        Err(e) => {
-            warn!("email send failed: {:#}", e);
+    // Render + send the email — only when an email sender + token + a
+    // recipient are all configured. Analysis-only cycles (no Gmail) skip
+    // this block; recommendations are still persisted and rendered in
+    // the in-app Recommendations tab via cmd_list_recommendations.
+    let message_id = match (deps.email, deps.gmail_access_token.as_deref()) {
+        (Some(sender), Some(access_token)) => {
+            match (
+                deps.config.email.recipient.as_deref().or(deps
+                    .config
+                    .email
+                    .gmail_account
+                    .as_deref()),
+                deps.config.email.gmail_account.as_deref(),
+            ) {
+                (Some(recipient), Some(from)) => {
+                    let rendered = render_for_cycle(
+                        &recs,
+                        &input,
+                        captures.len() as u32,
+                        total_cost,
+                        &cycle_id,
+                        deps.server_origin.clone(),
+                        deps.link_signer.clone(),
+                    )?;
+                    match sender.send(access_token, from, recipient, &rendered).await {
+                        Ok(id) => Some(id),
+                        Err(e) => {
+                            warn!("email send failed: {:#}", e);
+                            None
+                        }
+                    }
+                }
+                _ => {
+                    info!(
+                        "cycle {} producing recs but no email recipient/from configured; \
+                         skipping email send",
+                        cycle_id
+                    );
+                    None
+                }
+            }
+        }
+        _ => {
+            info!(
+                "cycle {} running in analysis-only mode (no email sender/token); recs \
+                 persisted to DB only",
+                cycle_id
+            );
             None
         }
     };

@@ -115,6 +115,24 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
         run: npm run tauri -- build --verbose
 
+      # Bundle smoke: run the self-test binary against the same source
+      # tree and toolchain that produced the bundle. If a subsystem is
+      # broken (keychain access, crypto, storage, fixture cycle) we'd
+      # rather fail the release here than ship to users. v0.5.5 added
+      # this as a regression guard for the v0.5.0–v0.5.2 class of bug.
+      # Linux runners don't have a session keyring so we skip the
+      # keychain subsystem there.
+      - name: self-test (bundle smoke)
+        if: runner.os != 'Linux'
+        working-directory: src-tauri
+        run: cargo run --release --bin self_test --jobs 2
+      - name: self-test (Linux, skips keychain)
+        if: runner.os == 'Linux'
+        working-directory: src-tauri
+        env:
+          AGENTSCOUT_SELFTEST_SKIP_KEYCHAIN: "1"
+        run: cargo run --release --bin self_test --jobs 2 || echo "Linux keychain not available; non-fatal for v0.5.5"
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:

@@ -136,6 +136,86 @@ async function save() {
 
 document.getElementById("save-btn")?.addEventListener("click", save);
 
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.5 — Anthropic API key entry + test
+// ───────────────────────────────────────────────────────────────────────
+
+async function refreshApiKeyStatus() {
+  const status = document.getElementById("apikey-status");
+  if (!status || !invoke) return;
+  try {
+    const creds = await invoke("cmd_get_credentials_status");
+    if (creds.has_anthropic_key) {
+      status.innerHTML = '<span style="color: #16a34a;">&#10003; Anthropic key set in keychain.</span>';
+    } else {
+      status.innerHTML = '<span style="color: #dc2626;">&#10007; No Anthropic key set. Paste your key below.</span>';
+    }
+  } catch (e) {
+    status.textContent = `Status check failed: ${e}`;
+  }
+}
+
+async function saveApiKey() {
+  if (!invoke) return;
+  const input = document.getElementById("apikey-input");
+  const result = document.getElementById("apikey-result");
+  const key = input.value.trim();
+  if (!key) {
+    result.innerHTML = '<span style="color: #dc2626;">Paste a key first.</span>';
+    return;
+  }
+  result.textContent = "Saving...";
+  try {
+    await invoke("cmd_set_anthropic_key", { key });
+    input.value = "";
+    result.innerHTML = '<span style="color: #16a34a;">&#10003; Saved to keychain.</span>';
+    refreshApiKeyStatus();
+  } catch (e) {
+    result.innerHTML = `<span style="color: #dc2626;">Save failed: ${e}</span>`;
+  }
+}
+
+async function testApiKey() {
+  if (!invoke) return;
+  const result = document.getElementById("apikey-result");
+  result.textContent = "Testing connection (this calls api.anthropic.com)...";
+  try {
+    const res = await invoke("cmd_test_anthropic_key");
+    if (res.ok) {
+      result.innerHTML = `<span style="color: #16a34a;">&#10003; ${res.message}</span>`;
+    } else {
+      result.innerHTML = `<span style="color: #dc2626;">&#10007; ${res.message}</span>`;
+    }
+  } catch (e) {
+    result.innerHTML = `<span style="color: #dc2626;">Test failed: ${e}</span>`;
+  }
+}
+
+async function clearApiKey() {
+  if (!invoke) return;
+  const result = document.getElementById("apikey-result");
+  if (!confirm("Clear the stored Anthropic API key? Analysis cycles will fail until you set a new one.")) return;
+  try {
+    await invoke("cmd_clear_anthropic_key");
+    result.innerHTML = '<span style="color: #16a34a;">&#10003; Cleared.</span>';
+    refreshApiKeyStatus();
+  } catch (e) {
+    result.innerHTML = `<span style="color: #dc2626;">Clear failed: ${e}</span>`;
+  }
+}
+
+document.getElementById("apikey-save-btn")?.addEventListener("click", saveApiKey);
+document.getElementById("apikey-test-btn")?.addEventListener("click", testApiKey);
+document.getElementById("apikey-clear-btn")?.addEventListener("click", clearApiKey);
+// Enter inside the input triggers Save.
+document.getElementById("apikey-input")?.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveApiKey();
+  }
+});
+
 loadCapability();
 loadCost();
 loadSettings();
+refreshApiKeyStatus();

@@ -5,8 +5,13 @@ pub mod config;
 pub mod conversation;
 pub mod email;
 pub mod ocr;
+pub mod secrets;
 pub mod storage;
 
+use crate::analysis::{run_cycle, OrchestratorDeps};
+use crate::anthropic::{
+    AnthropicClient, CompletionRequest, LiveAnthropicClient, Message as AnthropicMessage, Role,
+};
 use crate::capture::{ActivityMonitor, Scheduler, TickOutcome, XcapScreenshotter};
 use crate::config::Config;
 use crate::email::{start_disposition_server, DispositionServerConfig, LinkSigner, RunningServer};
@@ -54,6 +59,12 @@ pub fn run() {
             cmd_get_capability_info,
             cmd_get_settings,
             cmd_update_settings,
+            // v0.5.5: credentials + on-demand analysis
+            cmd_set_anthropic_key,
+            cmd_test_anthropic_key,
+            cmd_clear_anthropic_key,
+            cmd_get_credentials_status,
+            cmd_run_cycle_now,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -466,6 +477,248 @@ struct StarterTemplateView {
     name: String,
     description: String,
 }
+
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.5 — credentials + on-demand cycle
+// ───────────────────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn cmd_set_anthropic_key(key: String) -> Result<(), String> {
+    crate::secrets::set_anthropic_key(&key).map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+async fn cmd_clear_anthropic_key() -> Result<(), String> {
+    crate::secrets::clear_anthropic_key().map_err(|e| format!("{:#}", e))
+}
+
+#[derive(serde::Serialize)]
+struct TestKeyResult {
+    ok: bool,
+    /// Friendly message: "Connected — Claude responded with X tokens" or
+    /// the trimmed Anthropic error message.
+    message: String,
+}
+
+/// Hits Anthropic with a tiny prompt to validate the stored key. Used by
+/// the Settings UI's "Test connection" button. Returns a structured
+/// result instead of `Result<_, String>` so the UI can render success
+/// and failure with the same render path.
+///
+/// Uses the user's configured cluster-summary model (default
+/// claude-sonnet-4-6) so a successful test confirms the same model the
+/// real analysis cycle will use is callable. If the user's configured
+/// model doesn't exist on Anthropic, the error message surfaces here
+/// rather than failing later inside `run_cycle`.
+#[tauri::command]
+async fn cmd_test_anthropic_key(state: State<'_, AppState>) -> Result<TestKeyResult, String> {
+    let key = match crate::secrets::get_anthropic_key().map_err(|e| format!("{:#}", e))? {
+        Some(k) => k,
+        None => {
+            return Ok(TestKeyResult {
+                ok: false,
+                message: "No API key set. Paste your key above and click Save.".into(),
+            })
+        }
+    };
+
+    let model = {
+        let cfg = state.config.lock().await;
+        cfg.analysis.model_cluster_summary.clone()
+    };
+
+    let client = LiveAnthropicClient::new(key);
+    let messages = vec![AnthropicMessage {
+        role: Role::User,
+        content: "Reply with exactly the word: OK".into(),
+    }];
+    let req = CompletionRequest {
+        messages: &messages,
+        system: None,
+        model: &model,
+        max_tokens: 16,
+        cache_breakpoint: None,
+    };
+
+    match client.complete(req).await {
+        Ok(resp) => Ok(TestKeyResult {
+            ok: true,
+            message: format!(
+                "Connected — {} replied ({} input + {} output tokens).",
+                model, resp.usage.input_tokens, resp.usage.output_tokens
+            ),
+        }),
+        Err(e) => {
+            let raw = format!("{:#}", e);
+            // Trim long body dumps; users only need the gist.
+            let trimmed: String = raw.chars().take(400).collect();
+            Ok(TestKeyResult {
+                ok: false,
+                message: trimmed,
+            })
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+struct CredsStatus {
+    has_anthropic_key: bool,
+    has_gmail_oauth: bool,
+    recipient_email: Option<String>,
+    /// Convenience flag for the "Setup status" badge — green when this is
+    /// true. v0.5.5 considers Gmail optional, so this is true when the
+    /// Anthropic key is set; v0.5.7 will tighten this once OAuth is wired.
+    minimum_setup_complete: bool,
+}
+
+#[tauri::command]
+async fn cmd_get_credentials_status(state: State<'_, AppState>) -> Result<CredsStatus, String> {
+    let cfg = state.config.lock().await;
+    let has_anthropic_key = crate::secrets::has_anthropic_key();
+    // Gmail OAuth refresh-token check is delegated to oauth.rs's
+    // keychain account; v0.5.7 hooks this up. For now: not connected.
+    let has_gmail_oauth = false;
+    Ok(CredsStatus {
+        has_anthropic_key,
+        has_gmail_oauth,
+        recipient_email: cfg
+            .email
+            .recipient
+            .clone()
+            .or_else(|| cfg.email.gmail_account.clone()),
+        minimum_setup_complete: has_anthropic_key,
+    })
+}
+
+#[derive(serde::Serialize)]
+struct RunCycleResultView {
+    cycle_id: String,
+    n_captures: usize,
+    n_clusters: usize,
+    n_recommendations: usize,
+    n_visible: usize,
+    n_suppressed: usize,
+    estimated_cost_usd: f64,
+    email_sent: bool,
+}
+
+/// Runs a single analysis cycle right now against captures from the
+/// last `hours_back` hours. Skips email (analysis-only mode) when Gmail
+/// OAuth isn't connected; recommendations land in the Recommendations
+/// tab regardless. v0.5.5 entry point — the user clicks "Run analysis
+/// now" and this fires.
+#[tauri::command]
+async fn cmd_run_cycle_now(
+    state: State<'_, AppState>,
+    hours_back: u32,
+) -> Result<RunCycleResultView, String> {
+    // Read API key first so we fail fast with a clean message rather
+    // than panicking inside run_cycle when the client gets a 401.
+    let api_key = crate::secrets::get_anthropic_key()
+        .map_err(|e| format!("reading api key: {:#}", e))?
+        .ok_or_else(|| {
+            "No Anthropic API key set. Open Settings → paste your key → Save.".to_string()
+        })?;
+
+    // Re-tag recent captures into the current cycle so they actually
+    // get analyzed. Without this, captures from before the current
+    // active-hours session would be skipped by the orchestrator's
+    // "WHERE cycle_id = ?" load.
+    let cycle_id = state
+        .storage
+        .load_active_hours()
+        .map_err(|e| format!("{:#}", e))?
+        .current_cycle_id;
+    let cutoff = chrono::Utc::now().timestamp() - i64::from(hours_back) * 3600;
+    let n_retagged = state
+        .storage
+        .retag_captures_into_cycle(&cycle_id, cutoff)
+        .map_err(|e| format!("retagging captures: {:#}", e))?;
+    info!(
+        "cmd_run_cycle_now: re-tagged {} captures from last {}h into cycle {}",
+        n_retagged, hours_back, cycle_id
+    );
+
+    // Build the orchestrator deps. Email is None for v0.5.5 — analysis
+    // only. v0.5.7 wires Some(GmailSender).
+    let cfg_owned: Config = {
+        let cfg = state.config.lock().await;
+        cfg.clone()
+    };
+
+    let live = LiveAnthropicClient::new(api_key);
+
+    // Load user-profile.md and tier-definitions.json from storage if
+    // they exist; otherwise use baseline defaults so the cycle runs
+    // even before the user has done the setup conversation. The
+    // recommendations will be less personalized but won't be empty.
+    let storage_root = state.storage.root().to_path_buf();
+    let user_profile_md = std::fs::read_to_string(storage_root.join("user-profile.md"))
+        .unwrap_or_else(|_| DEFAULT_USER_PROFILE_MD.to_string());
+    let tier_definitions_json = std::fs::read_to_string(storage_root.join("tier-definitions.json"))
+        .unwrap_or_else(|_| DEFAULT_TIER_DEFINITIONS_JSON.to_string());
+
+    let deps = OrchestratorDeps {
+        config: &cfg_owned,
+        storage: state.storage.clone(),
+        anthropic: &live,
+        email: None,
+        link_signer: state.link_signer.clone(),
+        gmail_access_token: None,
+        server_origin: state.disposition_server_origin.clone(),
+        user_profile_md,
+        tier_definitions_json,
+    };
+
+    let result = run_cycle(deps).await.map_err(|e| format!("{:#}", e))?;
+    Ok(RunCycleResultView {
+        cycle_id: result.cycle_id,
+        n_captures: result.n_captures,
+        n_clusters: result.n_clusters,
+        n_recommendations: result.n_recommendations,
+        n_visible: result.n_visible,
+        n_suppressed: result.n_suppressed,
+        estimated_cost_usd: result.estimated_cost_usd,
+        email_sent: result.email_message_id.is_some(),
+    })
+}
+
+const DEFAULT_USER_PROFILE_MD: &str = r#"# AgentScout User Profile (default)
+
+You haven't completed the setup conversation yet, so AgentScout is
+running with a generic profile. Recommendations will be less
+personalized than they could be. Open Settings → "Run setup
+conversation" to personalize."#;
+
+/// Minimal valid tier-definitions JSON used until the user completes
+/// the tier-calibration conversation. Two tiers covering the common
+/// "tactical/quantitative" and "strategic/qualitative" splits, both
+/// enabled with neutral weights.
+const DEFAULT_TIER_DEFINITIONS_JSON: &str = r#"{
+  "schema_version": 1,
+  "tiers": [
+    {
+      "id": "time-reclaimers",
+      "name": "Time Reclaimers",
+      "description": "Tactical agents that save time on a recurring task you do today.",
+      "weight": 1.0,
+      "scoring": "quantitative",
+      "qualitative_multiplier": 50.0,
+      "enabled": true,
+      "example_shapes": []
+    },
+    {
+      "id": "strategic",
+      "name": "Strategic Helpers",
+      "description": "Agents that improve quality of decisions or shift how you work.",
+      "weight": 1.0,
+      "scoring": "qualitative",
+      "qualitative_multiplier": 100.0,
+      "enabled": true,
+      "example_shapes": []
+    }
+  ]
+}"#;
 
 fn build_ocr_engine(storage_root: &std::path::Path) -> Arc<dyn OcrEngine> {
     let tessdata_dir = storage_root.join("tessdata");

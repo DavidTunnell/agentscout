@@ -116,6 +116,25 @@ impl Storage {
         })
     }
 
+    /// Re-tags non-archived captures with `timestamp >= cutoff` into the
+    /// given cycle. Used by `cmd_run_cycle_now` so that an on-demand
+    /// analysis run includes captures from earlier active-hours sessions
+    /// (otherwise the orchestrator's `WHERE cycle_id = ?` would skip
+    /// them). Returns the number of rows updated.
+    pub fn retag_captures_into_cycle(&self, cycle_id: &str, cutoff_unix: i64) -> Result<usize> {
+        self.with_conn(|c| {
+            let n = c.execute(
+                "UPDATE captures
+                 SET cycle_id = ?1
+                 WHERE cycle_id != ?1
+                   AND archived = 0
+                   AND timestamp >= ?2",
+                rusqlite::params![cycle_id, cutoff_unix],
+            )?;
+            Ok(n)
+        })
+    }
+
     pub fn list_recent_captures(&self, limit: u32) -> Result<Vec<CaptureRow>> {
         self.with_conn(|c| {
             let mut stmt = c.prepare(

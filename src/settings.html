@@ -24,6 +24,31 @@
     </section>
 
     <section>
+      <h2>Anthropic API key</h2>
+      <p class="muted">
+        AgentScout uses your Anthropic API key to analyze captures and produce
+        recommendations. The key is stored in the OS keychain (Windows
+        Credential Manager / macOS Keychain / Linux Secret Service), never
+        in a config file or sent anywhere except api.anthropic.com.
+      </p>
+      <div id="apikey-status" class="muted" style="margin: 8px 0;"></div>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <input
+          id="apikey-input"
+          type="password"
+          placeholder="sk-ant-..."
+          style="flex: 1; min-width: 280px; padding: 6px 10px;"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="apikey-save-btn">Save</button>
+        <button id="apikey-test-btn">Test connection</button>
+        <button id="apikey-clear-btn">Clear</button>
+      </div>
+      <p id="apikey-result" class="muted" style="margin: 8px 0; min-height: 1.2em;"></p>
+    </section>
+
+    <section>
       <h2>Cost projection</h2>
       <div id="cost-body" class="muted">Loading...</div>
     </section>
