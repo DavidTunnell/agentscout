@@ -4,7 +4,6 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use keyring::Entry;
 use oauth2::basic::BasicClient;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, PkceCodeChallenge,
@@ -13,11 +12,16 @@ use oauth2::{
 use serde::{Deserialize, Serialize};
 use std::time::SystemTime;
 
-const KEYCHAIN_SERVICE: &str = "AgentScout";
-const KEYCHAIN_USER_REFRESH: &str = "gmail-refresh-v1";
 const GMAIL_AUTH_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
 const GMAIL_TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
 const GMAIL_SEND_SCOPE: &str = "https://www.googleapis.com/auth/gmail.send";
+
+// v0.5.13: refresh token storage moved to `crate::secrets` which uses
+// `tokio::task::spawn_blocking` + verify-after-write + encrypted-file
+// fallback. Earlier versions called `keyring::Entry` directly here and
+// silently no-op'd writes on Windows from inside the disposition
+// server's tokio task context (same bug class as the Anthropic-key
+// silent no-op fixed in v0.5.9).
 
 #[derive(Debug, Clone)]
 pub struct OAuthConfig {
@@ -81,7 +85,7 @@ pub async fn complete_auth(
         .context("exchanging authorization code for tokens")?;
 
     if let Some(refresh) = token_resp.refresh_token() {
-        store_refresh_token(refresh.secret())?;
+        crate::secrets::set_gmail_refresh_token(refresh.secret()).await?;
     } else {
         bail!(
             "Gmail did not return a refresh token; ensure access_type=offline and prompt=consent on the consent URL"
@@ -95,11 +99,11 @@ pub async fn complete_auth(
     })
 }
 
-/// Refresh the access token using the keychain-stored refresh token.
-/// Returns the fresh access token; updates the keychain refresh token
-/// if Google rotated it.
+/// Refresh the access token using the stored refresh token.
+/// Returns the fresh access token; updates storage if Google rotated it.
 pub async fn refresh_access_token(config: &OAuthConfig) -> Result<AccessToken> {
-    let refresh = load_refresh_token()?
+    let refresh = crate::secrets::get_gmail_refresh_token()
+        .await?
         .ok_or_else(|| anyhow!("no refresh token stored; user has not authorized Gmail yet"))?;
     let client = build_client(config)?;
     let http = http_client();
@@ -110,7 +114,7 @@ pub async fn refresh_access_token(config: &OAuthConfig) -> Result<AccessToken> {
         .context("refreshing access token")?;
 
     if let Some(new_refresh) = token_resp.refresh_token() {
-        store_refresh_token(new_refresh.secret())?;
+        crate::secrets::set_gmail_refresh_token(new_refresh.secret()).await?;
     }
 
     let expires_at = compute_expiry(token_resp.expires_in());
@@ -120,35 +124,12 @@ pub async fn refresh_access_token(config: &OAuthConfig) -> Result<AccessToken> {
     })
 }
 
-pub fn has_stored_refresh_token() -> Result<bool> {
-    Ok(load_refresh_token()?.is_some())
+pub async fn has_stored_refresh_token() -> Result<bool> {
+    Ok(crate::secrets::has_gmail_refresh_token().await)
 }
 
-pub fn revoke_stored_refresh_token() -> Result<()> {
-    let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_REFRESH)
-        .context("creating keychain entry for refresh token")?;
-    match entry.delete_credential() {
-        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(anyhow!(e)).context("deleting stored refresh token"),
-    }
-}
-
-fn store_refresh_token(value: &str) -> Result<()> {
-    let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_REFRESH)
-        .context("creating keychain entry for refresh token")?;
-    entry
-        .set_password(value)
-        .context("writing refresh token to keychain")
-}
-
-fn load_refresh_token() -> Result<Option<String>> {
-    let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_REFRESH)
-        .context("creating keychain entry for refresh token")?;
-    match entry.get_password() {
-        Ok(s) => Ok(Some(s)),
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(anyhow!(e)).context("reading refresh token from keychain"),
-    }
+pub async fn revoke_stored_refresh_token() -> Result<()> {
+    crate::secrets::clear_gmail_refresh_token().await
 }
 
 fn build_client(

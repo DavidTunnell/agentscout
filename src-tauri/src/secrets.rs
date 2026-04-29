@@ -33,6 +33,10 @@ const KEYCHAIN_SERVICE: &str = "AgentScout";
 const ACCOUNT_ANTHROPIC_KEY: &str = "anthropic-api-key";
 const ACCOUNT_GMAIL_OAUTH_CLIENT_ID: &str = "gmail-oauth-client-id";
 const ACCOUNT_GMAIL_OAUTH_CLIENT_SECRET: &str = "gmail-oauth-client-secret";
+/// Account name matches the original `KEYCHAIN_USER_REFRESH` constant
+/// in `email/oauth.rs` so legacy installs that already had a working
+/// keychain read the same value.
+const ACCOUNT_GMAIL_REFRESH: &str = "gmail-refresh-v1";
 
 const FALLBACK_DIR: &str = ".secrets";
 const FALLBACK_MASTER_FILENAME: &str = ".master";
@@ -334,6 +338,31 @@ pub async fn clear_gmail_oauth_creds() -> Result<()> {
 
 pub async fn has_gmail_oauth_creds() -> bool {
     matches!(get_gmail_oauth_creds().await, Ok(Some(_)))
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.13 — Gmail refresh token (moved out of email/oauth.rs which was
+// using keyring directly and silently no-op'd on Tauri's tokio worker
+// threads, same as the v0.5.9 Anthropic-key bug)
+// ───────────────────────────────────────────────────────────────────────
+
+pub async fn set_gmail_refresh_token(token: &str) -> Result<()> {
+    if token.trim().is_empty() {
+        anyhow::bail!("gmail refresh token cannot be empty");
+    }
+    store_secret_async(ACCOUNT_GMAIL_REFRESH, token.trim().to_string()).await
+}
+
+pub async fn get_gmail_refresh_token() -> Result<Option<String>> {
+    load_secret_async(ACCOUNT_GMAIL_REFRESH).await
+}
+
+pub async fn clear_gmail_refresh_token() -> Result<()> {
+    delete_secret_async(ACCOUNT_GMAIL_REFRESH).await
+}
+
+pub async fn has_gmail_refresh_token() -> bool {
+    matches!(get_gmail_refresh_token().await, Ok(Some(_)))
 }
 
 // ───────────────────────────────────────────────────────────────────────

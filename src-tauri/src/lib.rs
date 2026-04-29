@@ -755,7 +755,9 @@ async fn cmd_get_credentials_status(state: State<'_, AppState>) -> Result<CredsS
     // separately to give specific guidance ("you need creds" vs "you
     // need to click Connect").
     let has_gmail_creds = crate::secrets::has_gmail_oauth_creds().await;
-    let has_gmail_refresh = crate::email::has_stored_refresh_token().unwrap_or(false);
+    let has_gmail_refresh = crate::email::has_stored_refresh_token()
+        .await
+        .unwrap_or(false);
     let has_gmail_oauth = has_gmail_creds && has_gmail_refresh;
     Ok(CredsStatus {
         has_anthropic_key,
@@ -955,7 +957,9 @@ async fn cmd_get_system_health(state: State<'_, AppState>) -> Result<HealthRepor
     // Gmail — fully connected when both creds and refresh token exist;
     // partial / missing both are equally "warn" since email is optional.
     let has_creds = crate::secrets::has_gmail_oauth_creds().await;
-    let has_refresh = crate::email::has_stored_refresh_token().unwrap_or(false);
+    let has_refresh = crate::email::has_stored_refresh_token()
+        .await
+        .unwrap_or(false);
     let gmail_status: &'static str = if has_creds && has_refresh {
         "pass"
     } else {
@@ -1069,7 +1073,7 @@ async fn cmd_set_gmail_oauth_creds(args: SetGmailOAuthCredsArgs) -> Result<(), S
 async fn cmd_clear_gmail_oauth_creds() -> Result<(), String> {
     // Also revoke the stored refresh token — credentials and refresh
     // are paired; clearing one without the other leaves a dead token.
-    let _ = crate::email::oauth::revoke_stored_refresh_token();
+    let _ = crate::email::oauth::revoke_stored_refresh_token().await;
     crate::secrets::clear_gmail_oauth_creds()
         .await
         .map_err(|e| format!("{:#}", e))
@@ -1141,7 +1145,9 @@ async fn cmd_poll_gmail_oauth_status(csrf_state: String) -> Result<GmailOAuthSta
 
 #[tauri::command]
 async fn cmd_disconnect_gmail() -> Result<(), String> {
-    crate::email::oauth::revoke_stored_refresh_token().map_err(|e| format!("{:#}", e))
+    crate::email::oauth::revoke_stored_refresh_token()
+        .await
+        .map_err(|e| format!("{:#}", e))
 }
 
 #[tauri::command]
@@ -1218,7 +1224,7 @@ async fn try_fresh_gmail_access_token(
     let creds = crate::secrets::get_gmail_oauth_creds()
         .await?
         .ok_or_else(|| anyhow::anyhow!("Gmail OAuth client_id/secret not set"))?;
-    if !crate::email::has_stored_refresh_token()? {
+    if !crate::email::has_stored_refresh_token().await? {
         anyhow::bail!("No Gmail refresh token — user has not authorized Gmail yet");
     }
     let oauth_config = crate::email::OAuthConfig {
