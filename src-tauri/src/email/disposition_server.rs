@@ -169,7 +169,7 @@ async fn handle_oauth_callback(Query(q): Query<OAuthCallbackQuery>) -> impl Into
 
     // Reconstitute the OAuth client config from the keychain — same
     // call shape `cmd_begin_gmail_oauth` used.
-    let creds = match crate::secrets::get_gmail_oauth_creds() {
+    let creds = match crate::secrets::get_gmail_oauth_creds().await {
         Ok(Some(c)) => c,
         _ => {
             oauth_flow::mark_error(&state_token, "OAuth client creds vanished mid-flow".into());

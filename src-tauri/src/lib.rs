@@ -225,7 +225,7 @@ async fn auto_cycle_loop(
         if active.active_seconds < threshold_seconds {
             continue;
         }
-        if !crate::secrets::has_anthropic_key() {
+        if !crate::secrets::has_anthropic_key().await {
             // Threshold reached but no key — log once per loop tick at
             // info so the user sees this in logs and we don't spin.
             info!(
@@ -264,7 +264,8 @@ async fn run_auto_cycle(
     link_signer: Arc<LinkSigner>,
     server_origin: String,
 ) -> Result<()> {
-    let api_key = crate::secrets::get_anthropic_key()?
+    let api_key = crate::secrets::get_anthropic_key()
+        .await?
         .ok_or_else(|| anyhow::anyhow!("no anthropic api key"))?;
     let cfg_owned: Config = {
         let cfg = config.lock().await;
@@ -651,12 +652,16 @@ struct StarterTemplateView {
 
 #[tauri::command]
 async fn cmd_set_anthropic_key(key: String) -> Result<(), String> {
-    crate::secrets::set_anthropic_key(&key).map_err(|e| format!("{:#}", e))
+    crate::secrets::set_anthropic_key(&key)
+        .await
+        .map_err(|e| format!("{:#}", e))
 }
 
 #[tauri::command]
 async fn cmd_clear_anthropic_key() -> Result<(), String> {
-    crate::secrets::clear_anthropic_key().map_err(|e| format!("{:#}", e))
+    crate::secrets::clear_anthropic_key()
+        .await
+        .map_err(|e| format!("{:#}", e))
 }
 
 #[derive(serde::Serialize)]
@@ -679,7 +684,10 @@ struct TestKeyResult {
 /// rather than failing later inside `run_cycle`.
 #[tauri::command]
 async fn cmd_test_anthropic_key(state: State<'_, AppState>) -> Result<TestKeyResult, String> {
-    let key = match crate::secrets::get_anthropic_key().map_err(|e| format!("{:#}", e))? {
+    let key = match crate::secrets::get_anthropic_key()
+        .await
+        .map_err(|e| format!("{:#}", e))?
+    {
         Some(k) => k,
         None => {
             return Ok(TestKeyResult {
@@ -741,12 +749,12 @@ struct CredsStatus {
 #[tauri::command]
 async fn cmd_get_credentials_status(state: State<'_, AppState>) -> Result<CredsStatus, String> {
     let cfg = state.config.lock().await;
-    let has_anthropic_key = crate::secrets::has_anthropic_key();
+    let has_anthropic_key = crate::secrets::has_anthropic_key().await;
     // Gmail "fully connected" requires both OAuth client creds AND a
     // refresh token. v0.5.7 wires both. The Settings UI uses these
     // separately to give specific guidance ("you need creds" vs "you
     // need to click Connect").
-    let has_gmail_creds = crate::secrets::has_gmail_oauth_creds();
+    let has_gmail_creds = crate::secrets::has_gmail_oauth_creds().await;
     let has_gmail_refresh = crate::email::has_stored_refresh_token().unwrap_or(false);
     let has_gmail_oauth = has_gmail_creds && has_gmail_refresh;
     Ok(CredsStatus {
@@ -786,6 +794,7 @@ async fn cmd_run_cycle_now(
     // Read API key first so we fail fast with a clean message rather
     // than panicking inside run_cycle when the client gets a 401.
     let api_key = crate::secrets::get_anthropic_key()
+        .await
         .map_err(|e| format!("reading api key: {:#}", e))?
         .ok_or_else(|| {
             "No Anthropic API key set. Open Settings → paste your key → Save.".to_string()
@@ -927,23 +936,25 @@ async fn cmd_get_system_health(state: State<'_, AppState>) -> Result<HealthRepor
     });
 
     // Anthropic key
-    let has_key = crate::secrets::has_anthropic_key();
+    let has_key = crate::secrets::has_anthropic_key().await;
     if !has_key {
         overall = "fail";
     }
+    let secrets_diag = crate::secrets::get_diagnostic().await;
+    let key_msg = if has_key {
+        format!("Stored ({}).", secrets_diag.backend)
+    } else {
+        "Not set — open Settings → paste your key. Cycles cannot run without it.".into()
+    };
     rows.push(HealthRow {
         name: "Anthropic API key".into(),
         status: if has_key { "pass" } else { "fail" },
-        message: if has_key {
-            "Set in keychain.".into()
-        } else {
-            "Not set — open Settings → paste your key. Cycles cannot run without it.".into()
-        },
+        message: key_msg,
     });
 
     // Gmail — fully connected when both creds and refresh token exist;
     // partial / missing both are equally "warn" since email is optional.
-    let has_creds = crate::secrets::has_gmail_oauth_creds();
+    let has_creds = crate::secrets::has_gmail_oauth_creds().await;
     let has_refresh = crate::email::has_stored_refresh_token().unwrap_or(false);
     let gmail_status: &'static str = if has_creds && has_refresh {
         "pass"
@@ -1050,6 +1061,7 @@ struct SetGmailOAuthCredsArgs {
 #[tauri::command]
 async fn cmd_set_gmail_oauth_creds(args: SetGmailOAuthCredsArgs) -> Result<(), String> {
     crate::secrets::set_gmail_oauth_creds(&args.client_id, args.client_secret.as_deref())
+        .await
         .map_err(|e| format!("{:#}", e))
 }
 
@@ -1058,7 +1070,9 @@ async fn cmd_clear_gmail_oauth_creds() -> Result<(), String> {
     // Also revoke the stored refresh token — credentials and refresh
     // are paired; clearing one without the other leaves a dead token.
     let _ = crate::email::oauth::revoke_stored_refresh_token();
-    crate::secrets::clear_gmail_oauth_creds().map_err(|e| format!("{:#}", e))
+    crate::secrets::clear_gmail_oauth_creds()
+        .await
+        .map_err(|e| format!("{:#}", e))
 }
 
 #[derive(serde::Serialize)]
@@ -1075,6 +1089,7 @@ async fn cmd_begin_gmail_oauth(
     state: State<'_, AppState>,
 ) -> Result<BeginGmailOAuthResult, String> {
     let creds = crate::secrets::get_gmail_oauth_creds()
+        .await
         .map_err(|e| format!("{:#}", e))?
         .ok_or_else(|| {
             "No Gmail OAuth client credentials set. Open Settings → Gmail and paste your \
@@ -1200,7 +1215,8 @@ async fn cmd_send_test_email(state: State<'_, AppState>) -> Result<String, Strin
 async fn try_fresh_gmail_access_token(
     disposition_server_origin: &str,
 ) -> anyhow::Result<crate::email::AccessToken> {
-    let creds = crate::secrets::get_gmail_oauth_creds()?
+    let creds = crate::secrets::get_gmail_oauth_creds()
+        .await?
         .ok_or_else(|| anyhow::anyhow!("Gmail OAuth client_id/secret not set"))?;
     if !crate::email::has_stored_refresh_token()? {
         anyhow::bail!("No Gmail refresh token — user has not authorized Gmail yet");
@@ -1236,8 +1252,9 @@ struct PersonalizationStatus {
 /// Build a `LiveAnthropicClient` from the keychain. Shared helper for
 /// every conversation cmd (and `cmd_run_cycle_now`). Returns the
 /// "no key set" error string the UI shows verbatim.
-fn build_live_anthropic() -> Result<LiveAnthropicClient, String> {
+async fn build_live_anthropic() -> Result<LiveAnthropicClient, String> {
     let key = crate::secrets::get_anthropic_key()
+        .await
         .map_err(|e| format!("reading api key: {:#}", e))?
         .ok_or_else(|| {
             "No Anthropic API key set. Open Settings → paste your key → Save first.".to_string()
@@ -1271,7 +1288,7 @@ async fn cmd_continue_setup_conversation(
     state: State<'_, AppState>,
     reply: String,
 ) -> Result<ConversationStep, String> {
-    let client = build_live_anthropic()?;
+    let client = build_live_anthropic().await?;
     let model = {
         let cfg = state.config.lock().await;
         cfg.analysis.model_cluster_summary.clone()
@@ -1295,7 +1312,7 @@ async fn cmd_continue_setup_conversation(
 
 #[tauri::command]
 async fn cmd_finalize_setup_conversation(state: State<'_, AppState>) -> Result<String, String> {
-    let client = build_live_anthropic()?;
+    let client = build_live_anthropic().await?;
     let model = {
         let cfg = state.config.lock().await;
         cfg.analysis.model_synthesis.clone()
@@ -1351,7 +1368,7 @@ async fn cmd_continue_tier_calibration(
     state: State<'_, AppState>,
     reply: String,
 ) -> Result<ConversationStep, String> {
-    let client = build_live_anthropic()?;
+    let client = build_live_anthropic().await?;
     let model = {
         let cfg = state.config.lock().await;
         cfg.analysis.model_cluster_summary.clone()
@@ -1375,7 +1392,7 @@ async fn cmd_continue_tier_calibration(
 
 #[tauri::command]
 async fn cmd_finalize_tier_calibration(state: State<'_, AppState>) -> Result<String, String> {
-    let client = build_live_anthropic()?;
+    let client = build_live_anthropic().await?;
     let model = {
         let cfg = state.config.lock().await;
         cfg.analysis.model_synthesis.clone()

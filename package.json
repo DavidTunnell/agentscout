@@ -1,6 +1,6 @@
 {
   "name": "agentscout",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "private": true,
   "description": "A desktop app that observes your work and recommends AI agent opportunities",
   "scripts": {
