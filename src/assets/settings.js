@@ -57,9 +57,22 @@ async function loadCapability() {
       const parts = [];
       if (cap.degraded_notice) parts.push(cap.degraded_notice);
       if (!cap.tesseract_available) {
-        parts.push(
-          "Tesseract isn't installed. This is optional — only Budget Mode (in Capture settings) uses OCR. Default mode sends the full screenshot to Claude's vision API and works without it. To enable Budget Mode: `brew install tesseract` (macOS), `apt install tesseract-ocr` (Linux). Windows installers from v0.5.10+ ship Tesseract bundled — if you're on Windows and seeing this notice, your install may be older or the bundled binary failed to copy."
-        );
+        // v0.5.11+: Windows MSIs strict-require Tesseract bundling, so
+        // this notice should NEVER fire on a Windows install. If it
+        // does, something corrupted the install (resources/ dir got
+        // wiped, antivirus quarantine, etc.). Linux .deb auto-pulls
+        // tesseract-ocr via apt deps. macOS users still need to brew
+        // install — deferred to v1.x.
+        const isWindows = navigator.userAgent.includes("Windows");
+        if (isWindows) {
+          parts.push(
+            "⚠️ Tesseract isn't reachable from this AgentScout install — but it should have been bundled in the MSI. Likely cause: install dir was modified, antivirus quarantined the binary, or you have a pre-v0.5.11 install. Reinstall the latest MSI from GitHub Releases. Without OCR, Budget Mode won't work; default mode is unaffected."
+          );
+        } else {
+          parts.push(
+            "Tesseract isn't installed (only Budget Mode uses OCR; default mode is fine without it). To enable: `brew install tesseract` on macOS, or your package manager on Linux. The .deb installer normally pulls it in automatically."
+          );
+        }
       }
       text.textContent = parts.join(" ");
       banner.hidden = false;

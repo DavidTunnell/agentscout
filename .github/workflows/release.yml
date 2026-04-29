@@ -86,19 +86,27 @@ jobs:
       - name: npm install (Tauri CLI)
         run: npm install
 
-      # v0.5.10: Bundle Tesseract on Windows so users don't have to
-      # install it separately. Choco's `tesseract` package is the
+      # v0.5.10/v0.5.11: Bundle Tesseract on Windows so users don't have
+      # to install it separately. Choco's `tesseract` package is the
       # UB-Mannheim distribution. We copy tesseract.exe + the DLLs it
       # needs into src-tauri/resources/tesseract/ where tauri-bundler's
-      # `bundle.resources` config picks them up. macOS and Linux are
-      # handled differently:
-      #   - Linux: .deb declares tesseract-ocr as a dependency
-      #   - macOS: users `brew install tesseract` (deferred to v1.x)
+      # `bundle.resources` config picks them up.
+      #
+      # v0.5.11: bundling is **strict-required**. If choco install fails
+      # OR the staging step can't locate tesseract.exe, the release
+      # fails. This prevents shipping a Windows MSI that lacks Tesseract
+      # (which would silently regress users back to "Tesseract not
+      # installed" notices and broken Budget Mode). Set
+      # AGENTSCOUT_ALLOW_MISSING_TESSERACT=1 to opt out for emergency
+      # hotfix builds.
+      #
+      # Other platforms:
+      #   - Linux: .deb declares tesseract-ocr as a dependency.
+      #   - macOS: users `brew install tesseract` (deferred to v1.x).
       - name: Install Tesseract via Chocolatey (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: choco install tesseract --no-progress -y --version=5.5.0.20241111
-        continue-on-error: true
 
       - name: Stage Tesseract binaries for bundling (Windows)
         if: runner.os == 'Windows'
@@ -114,16 +122,40 @@ jobs:
           )
           $tess = $candidates | Where-Object { Test-Path "$_\tesseract.exe" } | Select-Object -First 1
           if (-not $tess) {
-            Write-Warning "Tesseract not found after choco install — bundle will skip"
-            exit 0
+            if ($env:AGENTSCOUT_ALLOW_MISSING_TESSERACT -eq "1") {
+              Write-Warning "Tesseract not found and AGENTSCOUT_ALLOW_MISSING_TESSERACT=1 set; proceeding without bundle"
+              exit 0
+            }
+            Write-Error "Tesseract not found in any expected location after choco install. Searched: $($candidates -join ', ')"
+            exit 1
           }
           Write-Host "Copying Tesseract from $tess"
           Copy-Item "$tess\tesseract.exe" $dest -Force
-          # Bundle the DLLs that tesseract.exe links against. Use a
-          # dependency walker would be ideal but choco's distribution
-          # ships the relevant ones flat in the install dir.
+          # Bundle the DLLs that tesseract.exe links against. Choco's
+          # distribution ships them flat in the install dir.
           Copy-Item "$tess\*.dll" $dest -Force -ErrorAction SilentlyContinue
           Get-ChildItem $dest | Format-Table Name, Length
+
+      - name: Verify Tesseract bundle (Windows)
+        if: runner.os == 'Windows' && env.AGENTSCOUT_ALLOW_MISSING_TESSERACT != '1'
+        shell: pwsh
+        run: |
+          $tessExe = "src-tauri\resources\tesseract\tesseract.exe"
+          if (-not (Test-Path $tessExe)) {
+            Write-Error "tesseract.exe missing from bundle staging dir — release would ship without OCR"
+            exit 1
+          }
+          $size = (Get-Item $tessExe).Length
+          if ($size -lt 1MB) {
+            Write-Error "tesseract.exe at $tessExe is only $size bytes (expected >1MB) — staging copy is corrupt"
+            exit 1
+          }
+          $dlls = Get-ChildItem "src-tauri\resources\tesseract\*.dll"
+          if ($dlls.Count -lt 1) {
+            Write-Error "no DLLs staged — tesseract.exe will fail to launch on user machines without its deps"
+            exit 1
+          }
+          Write-Host "Bundle OK: tesseract.exe $size bytes + $($dlls.Count) DLL(s)"
 
       # tauri's macOS bundler tries to sign whenever APPLE_CERTIFICATE
       # is set, even to an empty string. We split into two steps so the
