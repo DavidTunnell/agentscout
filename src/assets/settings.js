@@ -40,6 +40,13 @@ function readForm(form) {
       out[el.name] = el.checked;
     } else if (el.type === "number") {
       out[el.name] = parseFloat(el.value);
+    } else if (el.tagName === "SELECT" && /^\d+(\.\d+)?$/.test(el.value)) {
+      // <select> options with all-numeric values (e.g. cadence_minutes
+      // = "3" | "5" | "10" | "15") need to be sent as numbers, not
+      // strings — Rust's u32/f32 deserializers reject "5". Selects
+      // with non-numeric values (e.g. model_cluster_summary =
+      // "claude-sonnet-4-6") stay as strings.
+      out[el.name] = Number(el.value);
     } else {
       out[el.name] = el.value;
     }
