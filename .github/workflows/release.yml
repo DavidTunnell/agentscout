@@ -89,12 +89,15 @@ jobs:
       # tauri's macOS bundler tries to sign whenever APPLE_CERTIFICATE
       # is set, even to an empty string. We split into two steps so the
       # signing path is only taken when the secret is actually populated.
-      # --bin agentscout is required: the package has 3 auto-discovered
+      #
+      # Binary disambiguation note: the package has 3 auto-discovered
       # binaries (agentscout GUI, smoke CLI, replay-cycle CLI). Without
-      # this flag, tauri-cli picks one based on FS iteration order, which
-      # differs across runners. v0.5.0/v0.5.1 shipped CLI binaries by
-      # accident. Cargo.toml also has `default-run = "agentscout"` as
-      # belt-and-suspenders.
+      # disambiguation, tauri-cli picks one based on FS iteration order
+      # — which differs across runners. v0.5.0/v0.5.1 shipped CLI
+      # binaries by accident. We rely on `default-run = "agentscout"`
+      # in Cargo.toml (added in v0.5.2/v0.5.3) — `tauri build` does not
+      # accept a `--bin` flag (rejected with clap "unexpected argument"),
+      # so the cargo-side default-run is the only knob we need.
       - name: tauri build (signed macOS)
         if: runner.os == 'macOS' && env.APPLE_CERTIFICATE != ''
         env:
@@ -104,13 +107,13 @@ jobs:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: npm run tauri -- build --verbose --bin agentscout
+        run: npm run tauri -- build --verbose
 
       - name: tauri build (unsigned)
         if: runner.os != 'macOS' || env.APPLE_CERTIFICATE == ''
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-        run: npm run tauri -- build --verbose --bin agentscout
+        run: npm run tauri -- build --verbose
 
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
