@@ -1,12 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "AgentScout",
-  "version": "0.5.3",
+  "version": "0.5.4",
   "identifier": "com.agentscout.app",
   "build": {
     "frontendDist": "../src"
   },
   "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
         "title": "AgentScout",
