@@ -67,6 +67,7 @@ pub async fn start(
     let state = AppState { storage, signer };
     let app = Router::new()
         .route("/disposition", get(handle_disposition))
+        .route("/oauth/callback", get(handle_oauth_callback))
         .route("/health", get(handle_health))
         .with_state(state);
 
@@ -76,6 +77,9 @@ pub async fn start(
             .context("binding disposition server to 127.0.0.1")?;
     let addr = listener.local_addr()?;
     let origin = format!("http://{}:{}", addr.ip(), addr.port());
+    // Record for the OAuth callback handler to read when it builds the
+    // redirect_uri at exchange time (v0.5.7).
+    record_server_origin(&origin);
 
     let (shutdown_tx, shutdown_rx) = tokio::sync::oneshot::channel();
     let task = tokio::spawn(async move {
@@ -97,6 +101,155 @@ pub async fn start(
 
 async fn handle_health() -> &'static str {
     "ok"
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+    #[serde(rename = "error_description")]
+    error_description: Option<String>,
+}
+
+/// Receives the Google OAuth redirect after the user consents. Looks
+/// up the in-flight flow by `state`, performs the code-for-token
+/// exchange, persists the refresh token, and signals completion via
+/// the shared `oauth_flow` store. Renders a "you can close this tab"
+/// page so the user gets visual confirmation.
+async fn handle_oauth_callback(Query(q): Query<OAuthCallbackQuery>) -> impl IntoResponse {
+    use crate::email::oauth;
+    use crate::email::oauth_flow;
+
+    if let Some(err) = q.error.as_deref() {
+        let detail = q.error_description.as_deref().unwrap_or("");
+        if let Some(state) = q.state.as_deref() {
+            oauth_flow::mark_error(state, format!("Google returned: {err} {detail}"));
+        }
+        return error_page(
+            StatusCode::BAD_REQUEST,
+            "Gmail consent declined",
+            &format!("{err}: {detail}. Close this tab and try again."),
+        );
+    }
+
+    let code = match q.code {
+        Some(c) => c,
+        None => {
+            return error_page(
+                StatusCode::BAD_REQUEST,
+                "Missing code",
+                "Google didn't include an authorization code in the redirect.",
+            )
+        }
+    };
+    let state_token = match q.state {
+        Some(s) => s,
+        None => {
+            return error_page(
+                StatusCode::BAD_REQUEST,
+                "Missing state",
+                "Google didn't include the state token. CSRF protection failed.",
+            )
+        }
+    };
+
+    let verifier = match oauth_flow::take_verifier(&state_token) {
+        Some(v) => v,
+        None => {
+            return error_page(
+                StatusCode::BAD_REQUEST,
+                "Unknown state",
+                "AgentScout has no record of starting an OAuth flow with this state token. \
+                 You may have clicked a stale link, or the app restarted while the flow was \
+                 in progress. Try clicking Connect Gmail again.",
+            )
+        }
+    };
+
+    // Reconstitute the OAuth client config from the keychain — same
+    // call shape `cmd_begin_gmail_oauth` used.
+    let creds = match crate::secrets::get_gmail_oauth_creds() {
+        Ok(Some(c)) => c,
+        _ => {
+            oauth_flow::mark_error(&state_token, "OAuth client creds vanished mid-flow".into());
+            return error_page(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Lost OAuth client creds",
+                "AgentScout's Gmail OAuth client_id is no longer in the keychain. Open \
+                 Settings → Gmail and re-enter your client_id.",
+            );
+        }
+    };
+    // Derive the redirect_uri from this very server's origin. Building
+    // it explicitly avoids the request struct giving us an externally-
+    // controlled host header.
+    let redirect_uri = match request_origin() {
+        Some(o) => format!("{o}/oauth/callback"),
+        None => {
+            oauth_flow::mark_error(&state_token, "could not determine server origin".into());
+            return error_page(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Server origin unknown",
+                "Could not determine our own origin to complete OAuth.",
+            );
+        }
+    };
+    let oauth_config = oauth::OAuthConfig {
+        client_id: creds.client_id,
+        client_secret: creds.client_secret,
+        redirect_uri,
+    };
+
+    match oauth::complete_auth(&oauth_config, code, verifier).await {
+        Ok(_access_token) => {
+            // The user-visible label could be derived from a Gmail
+            // userinfo call but adds another scope (userinfo.email).
+            // For v0.5.7 we just say "connected" — recipient address is
+            // configured separately in Settings.
+            oauth_flow::mark_complete(&state_token, "connected".to_string());
+            oauth_success_page()
+        }
+        Err(e) => {
+            oauth_flow::mark_error(&state_token, format!("{:#}", e));
+            error_page(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Token exchange failed",
+                &format!(
+                    "Google rejected the authorization code: {:#}. Open Settings → Gmail and \
+                     try again.",
+                    e
+                ),
+            )
+        }
+    }
+}
+
+/// Origin of THIS disposition server. Set during `start()` via a
+/// OnceLock so the OAuth callback handler can build its own
+/// redirect_uri without threading state through axum extractors.
+fn request_origin() -> Option<String> {
+    server_origin_holder().get().cloned()
+}
+
+fn server_origin_holder() -> &'static std::sync::OnceLock<String> {
+    static HOLDER: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    &HOLDER
+}
+
+fn record_server_origin(origin: &str) {
+    let _ = server_origin_holder().set(origin.to_string());
+}
+
+fn oauth_success_page() -> axum::response::Response {
+    let html = "<!doctype html><html><head><title>AgentScout · Gmail connected</title></head>
+<body style='font-family:-apple-system,Segoe UI,sans-serif;background:#f3f4f6;margin:0;padding:48px 24px;color:#111827;'>
+<div style='max-width:480px;margin:0 auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;padding:32px;'>
+<div style='font-size:13px;color:#16a34a;text-transform:uppercase;letter-spacing:0.04em;'>AgentScout</div>
+<h1 style='margin:6px 0 12px;font-size:22px;font-weight:600;'>Gmail connected.</h1>
+<p style='font-size:14px;line-height:1.6;color:#374151;margin:0;'>You can close this tab and return to AgentScout. Set a recipient email and run a cycle to receive your first recommendation email.</p>
+</div></body></html>";
+    Html(html).into_response()
 }
 
 async fn handle_disposition(

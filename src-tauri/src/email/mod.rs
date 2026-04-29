@@ -11,6 +11,7 @@ pub mod disposition_server;
 pub mod gmail;
 pub mod link_signer;
 pub mod oauth;
+pub mod oauth_flow;
 pub mod template;
 
 pub use disposition_server::{

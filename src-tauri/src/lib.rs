@@ -78,6 +78,14 @@ pub fn run() {
             cmd_continue_tier_calibration,
             cmd_finalize_tier_calibration,
             cmd_get_personalization_status,
+            // v0.5.7: Gmail OAuth + email send
+            cmd_set_gmail_oauth_creds,
+            cmd_clear_gmail_oauth_creds,
+            cmd_begin_gmail_oauth,
+            cmd_poll_gmail_oauth_status,
+            cmd_disconnect_gmail,
+            cmd_set_recipient_email,
+            cmd_send_test_email,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -590,9 +598,13 @@ struct CredsStatus {
 async fn cmd_get_credentials_status(state: State<'_, AppState>) -> Result<CredsStatus, String> {
     let cfg = state.config.lock().await;
     let has_anthropic_key = crate::secrets::has_anthropic_key();
-    // Gmail OAuth refresh-token check is delegated to oauth.rs's
-    // keychain account; v0.5.7 hooks this up. For now: not connected.
-    let has_gmail_oauth = false;
+    // Gmail "fully connected" requires both OAuth client creds AND a
+    // refresh token. v0.5.7 wires both. The Settings UI uses these
+    // separately to give specific guidance ("you need creds" vs "you
+    // need to click Connect").
+    let has_gmail_creds = crate::secrets::has_gmail_oauth_creds();
+    let has_gmail_refresh = crate::email::has_stored_refresh_token().unwrap_or(false);
+    let has_gmail_oauth = has_gmail_creds && has_gmail_refresh;
     Ok(CredsStatus {
         has_anthropic_key,
         has_gmail_oauth,
@@ -654,14 +666,26 @@ async fn cmd_run_cycle_now(
         n_retagged, hours_back, cycle_id
     );
 
-    // Build the orchestrator deps. Email is None for v0.5.5 — analysis
-    // only. v0.5.7 wires Some(GmailSender).
+    // Build the orchestrator deps. v0.5.7: when Gmail OAuth refresh
+    // token is present and creds are stored, we refresh an access token
+    // and pass Some(GmailSender). Otherwise email = None (analysis-only,
+    // v0.5.5 behavior).
     let cfg_owned: Config = {
         let cfg = state.config.lock().await;
         cfg.clone()
     };
 
     let live = LiveAnthropicClient::new(api_key);
+    let gmail_sender = crate::email::GmailSender::new();
+    let access_token = try_fresh_gmail_access_token(&state.disposition_server_origin)
+        .await
+        .ok();
+
+    let (email_arg, token_arg): (Option<&dyn crate::email::EmailSender>, Option<String>) =
+        match access_token {
+            Some(tok) => (Some(&gmail_sender), Some(tok.token)),
+            None => (None, None),
+        };
 
     // Load user-profile.md and tier-definitions.json from storage if
     // they exist; otherwise use baseline defaults so the cycle runs
@@ -677,9 +701,9 @@ async fn cmd_run_cycle_now(
         config: &cfg_owned,
         storage: state.storage.clone(),
         anthropic: &live,
-        email: None,
+        email: email_arg,
         link_signer: state.link_signer.clone(),
-        gmail_access_token: None,
+        gmail_access_token: token_arg,
         server_origin: state.disposition_server_origin.clone(),
         user_profile_md,
         tier_definitions_json,
@@ -696,6 +720,182 @@ async fn cmd_run_cycle_now(
         estimated_cost_usd: result.estimated_cost_usd,
         email_sent: result.email_message_id.is_some(),
     })
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.7 — Gmail OAuth + email send
+// ───────────────────────────────────────────────────────────────────────
+
+#[derive(serde::Deserialize)]
+struct SetGmailOAuthCredsArgs {
+    client_id: String,
+    client_secret: Option<String>,
+}
+
+#[tauri::command]
+async fn cmd_set_gmail_oauth_creds(args: SetGmailOAuthCredsArgs) -> Result<(), String> {
+    crate::secrets::set_gmail_oauth_creds(&args.client_id, args.client_secret.as_deref())
+        .map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+async fn cmd_clear_gmail_oauth_creds() -> Result<(), String> {
+    // Also revoke the stored refresh token — credentials and refresh
+    // are paired; clearing one without the other leaves a dead token.
+    let _ = crate::email::oauth::revoke_stored_refresh_token();
+    crate::secrets::clear_gmail_oauth_creds().map_err(|e| format!("{:#}", e))
+}
+
+#[derive(serde::Serialize)]
+struct BeginGmailOAuthResult {
+    auth_url: String,
+    csrf_state: String,
+}
+
+/// Starts a fresh Gmail OAuth flow. Returns the Google consent URL +
+/// the csrf state token (the frontend uses the state token to poll
+/// status).
+#[tauri::command]
+async fn cmd_begin_gmail_oauth(
+    state: State<'_, AppState>,
+) -> Result<BeginGmailOAuthResult, String> {
+    let creds = crate::secrets::get_gmail_oauth_creds()
+        .map_err(|e| format!("{:#}", e))?
+        .ok_or_else(|| {
+            "No Gmail OAuth client credentials set. Open Settings → Gmail and paste your \
+             GCP OAuth client_id (and optionally client_secret) first."
+                .to_string()
+        })?;
+
+    let redirect_uri = format!("{}/oauth/callback", state.disposition_server_origin);
+    let oauth_config = crate::email::OAuthConfig {
+        client_id: creds.client_id,
+        client_secret: creds.client_secret,
+        redirect_uri,
+    };
+    let init = crate::email::begin_auth(&oauth_config).map_err(|e| format!("{:#}", e))?;
+    crate::email::oauth_flow::put_flow(init.csrf_state.clone(), init.pkce_verifier);
+    Ok(BeginGmailOAuthResult {
+        auth_url: init.auth_url,
+        csrf_state: init.csrf_state,
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum GmailOAuthStatus {
+    Unknown,
+    InProgress,
+    Completed { account_label: String },
+    Failed { error: String },
+}
+
+#[tauri::command]
+async fn cmd_poll_gmail_oauth_status(csrf_state: String) -> Result<GmailOAuthStatus, String> {
+    use crate::email::oauth_flow::FlowStatus;
+    Ok(match crate::email::oauth_flow::poll_status(&csrf_state) {
+        FlowStatus::Unknown => GmailOAuthStatus::Unknown,
+        FlowStatus::InProgress => GmailOAuthStatus::InProgress,
+        FlowStatus::Completed { account_label } => {
+            // Reading harvest forgets the flow so memory doesn't grow
+            // across reconnect attempts.
+            crate::email::oauth_flow::forget(&csrf_state);
+            GmailOAuthStatus::Completed { account_label }
+        }
+        FlowStatus::Failed { error } => {
+            crate::email::oauth_flow::forget(&csrf_state);
+            GmailOAuthStatus::Failed { error }
+        }
+    })
+}
+
+#[tauri::command]
+async fn cmd_disconnect_gmail() -> Result<(), String> {
+    crate::email::oauth::revoke_stored_refresh_token().map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+async fn cmd_set_recipient_email(state: State<'_, AppState>, email: String) -> Result<(), String> {
+    let trimmed = email.trim();
+    if trimmed.is_empty() {
+        // Allow empty to clear.
+        let mut cfg = state.config.lock().await;
+        cfg.email.recipient = None;
+        return cfg.save().map_err(|e| format!("{:#}", e));
+    }
+    if !trimmed.contains('@') {
+        return Err("That doesn't look like an email address.".into());
+    }
+    let mut cfg = state.config.lock().await;
+    cfg.email.recipient = Some(trimmed.to_string());
+    // Default Gmail account = recipient unless the user explicitly set
+    // a separate from. Avoids "no Gmail account configured" errors.
+    if cfg.email.gmail_account.is_none() {
+        cfg.email.gmail_account = Some(trimmed.to_string());
+    }
+    cfg.save().map_err(|e| format!("{:#}", e))
+}
+
+#[tauri::command]
+async fn cmd_send_test_email(state: State<'_, AppState>) -> Result<String, String> {
+    let recipient = {
+        let cfg = state.config.lock().await;
+        cfg.email
+            .recipient
+            .clone()
+            .or_else(|| cfg.email.gmail_account.clone())
+            .ok_or_else(|| {
+                "No recipient email set. Save one in Settings → Gmail first.".to_string()
+            })?
+    };
+    let access = try_fresh_gmail_access_token(&state.disposition_server_origin)
+        .await
+        .map_err(|e| format!("{:#}", e))?;
+
+    let from = {
+        let cfg = state.config.lock().await;
+        cfg.email
+            .gmail_account
+            .clone()
+            .unwrap_or_else(|| recipient.clone())
+    };
+
+    let rendered = crate::email::RenderedEmail {
+        subject: "AgentScout test email".into(),
+        html_body: "<p>If you're reading this, AgentScout's Gmail OAuth setup is \
+                    working.</p><p>This was sent from the \"Send test email\" button in \
+                    Settings.</p>"
+            .into(),
+        plain_body:
+            "If you're reading this, AgentScout's Gmail OAuth setup is working.\n\nSent from the \"Send test email\" button in Settings.".into(),
+    };
+    let sender = crate::email::GmailSender::new();
+    use crate::email::EmailSender as _;
+    sender
+        .send(&access.token, &from, &recipient, &rendered)
+        .await
+        .map(|id| format!("Sent (Gmail message id: {id}). Check your inbox."))
+        .map_err(|e| format!("{:#}", e))
+}
+
+/// Helper used by both `cmd_run_cycle_now`'s email step and
+/// `cmd_send_test_email` to convert a stored refresh token + creds
+/// into a fresh access token. Returns Err if any of the inputs are
+/// missing OR the refresh exchange fails.
+async fn try_fresh_gmail_access_token(
+    disposition_server_origin: &str,
+) -> anyhow::Result<crate::email::AccessToken> {
+    let creds = crate::secrets::get_gmail_oauth_creds()?
+        .ok_or_else(|| anyhow::anyhow!("Gmail OAuth client_id/secret not set"))?;
+    if !crate::email::has_stored_refresh_token()? {
+        anyhow::bail!("No Gmail refresh token — user has not authorized Gmail yet");
+    }
+    let oauth_config = crate::email::OAuthConfig {
+        client_id: creds.client_id,
+        client_secret: creds.client_secret,
+        redirect_uri: format!("{disposition_server_origin}/oauth/callback"),
+    };
+    crate::email::refresh_access_token(&oauth_config).await
 }
 
 // ───────────────────────────────────────────────────────────────────────

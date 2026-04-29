@@ -48,6 +48,73 @@
       <p id="apikey-result" class="muted" style="margin: 8px 0; min-height: 1.2em;"></p>
     </section>
 
+    <section id="gmail-section">
+      <h2>Gmail (optional)</h2>
+      <p class="muted">
+        AgentScout can email you ranked recommendations after each cycle.
+        Without Gmail set up, recommendations still land in the
+        <a href="review.html">Recommendations</a> tab.
+      </p>
+      <p class="muted" style="font-size: 12px;">
+        <strong>Setup:</strong> Create an OAuth 2.0 client in
+        Google Cloud Console (type: "Desktop app"; scope: <code>gmail.send</code>).
+        Add this redirect URI when creating it:
+        <code id="gmail-redirect-uri-display" style="background: var(--card); padding: 2px 4px;">…</code>
+        — paste the resulting client_id (and client_secret if your
+        client has one) below.
+      </p>
+
+      <h3 style="margin-top: 12px;">OAuth client credentials</h3>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <input
+          id="gmail-client-id"
+          type="text"
+          placeholder="123456789-abcd.apps.googleusercontent.com"
+          style="flex: 1; min-width: 280px; padding: 6px 10px;"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <input
+          id="gmail-client-secret"
+          type="password"
+          placeholder="(optional client_secret)"
+          style="flex: 1; min-width: 200px; padding: 6px 10px;"
+          autocomplete="off"
+          spellcheck="false"
+        />
+      </div>
+      <div style="display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap;">
+        <button id="gmail-creds-save-btn">Save creds</button>
+        <button id="gmail-creds-clear-btn">Clear creds</button>
+      </div>
+
+      <h3 style="margin-top: 12px;">Connection</h3>
+      <p id="gmail-status" class="muted" style="margin: 6px 0;">Loading…</p>
+      <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+        <button id="gmail-connect-btn">Connect Gmail</button>
+        <button id="gmail-disconnect-btn">Disconnect</button>
+        <button id="gmail-test-email-btn">Send test email</button>
+      </div>
+
+      <h3 style="margin-top: 12px;">Recipient</h3>
+      <p class="muted">
+        Where AgentScout sends recommendation emails. Usually your own
+        Gmail address; can be anything you control.
+      </p>
+      <div style="display: flex; gap: 8px; align-items: center; flex-wrap: wrap;">
+        <input
+          id="gmail-recipient"
+          type="email"
+          placeholder="you@example.com"
+          style="flex: 1; min-width: 280px; padding: 6px 10px;"
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <button id="gmail-recipient-save-btn">Save recipient</button>
+      </div>
+      <p id="gmail-result" class="muted" style="margin: 8px 0; min-height: 1.2em;"></p>
+    </section>
+
     <section id="personalization-section">
       <h2>Personalization (optional but recommended)</h2>
       <p class="muted">

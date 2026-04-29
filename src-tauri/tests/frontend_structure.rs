@@ -179,6 +179,14 @@ fn js_files_invoke_only_known_tauri_commands() {
         "cmd_continue_tier_calibration",
         "cmd_finalize_tier_calibration",
         "cmd_get_personalization_status",
+        // v0.5.7
+        "cmd_set_gmail_oauth_creds",
+        "cmd_clear_gmail_oauth_creds",
+        "cmd_begin_gmail_oauth",
+        "cmd_poll_gmail_oauth_status",
+        "cmd_disconnect_gmail",
+        "cmd_set_recipient_email",
+        "cmd_send_test_email",
     ];
     for js in ["app.js", "review.js", "inspector.js", "settings.js"] {
         let body = read_js(js);

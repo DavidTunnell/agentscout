@@ -366,8 +366,150 @@ wireConversation({
   finalizeCmd: "cmd_finalize_tier_calibration",
 });
 
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.7 — Gmail OAuth + recipient + test email
+// ───────────────────────────────────────────────────────────────────────
+
+async function refreshGmailStatus() {
+  if (!invoke) return;
+  const el = document.getElementById("gmail-status");
+  const redirectEl = document.getElementById("gmail-redirect-uri-display");
+  if (!el) return;
+  try {
+    const c = await invoke("cmd_get_credentials_status");
+    const cycleStatus = await invoke("cmd_get_cycle_status");
+    if (redirectEl) redirectEl.textContent = `${cycleStatus.disposition_server_origin}/oauth/callback`;
+    const lines = [];
+    if (c.has_gmail_oauth) {
+      lines.push('<span style="color:#16a34a;">&#10003; Gmail connected (OAuth client + refresh token).</span>');
+    } else {
+      lines.push('<span style="color:#a16207;">&#9888; Gmail not fully connected.</span>');
+    }
+    if (c.recipient_email) {
+      lines.push(`<span class="muted">Recipient: ${escapeHtml(c.recipient_email)}</span>`);
+    }
+    el.innerHTML = lines.join("<br>");
+    document.getElementById("gmail-recipient").value = c.recipient_email || "";
+  } catch (e) {
+    el.textContent = `Status check failed: ${e}`;
+  }
+}
+
+async function saveGmailCreds() {
+  const result = document.getElementById("gmail-result");
+  const cid = document.getElementById("gmail-client-id").value.trim();
+  const csec = document.getElementById("gmail-client-secret").value.trim();
+  if (!cid) {
+    result.innerHTML = '<span style="color:#dc2626;">client_id required.</span>';
+    return;
+  }
+  result.textContent = "Saving creds...";
+  try {
+    await invoke("cmd_set_gmail_oauth_creds", {
+      args: { client_id: cid, client_secret: csec || null },
+    });
+    document.getElementById("gmail-client-secret").value = "";
+    result.innerHTML = '<span style="color:#16a34a;">&#10003; Saved. Now click Connect Gmail.</span>';
+    refreshGmailStatus();
+  } catch (e) {
+    result.innerHTML = `<span style="color:#dc2626;">Save failed: ${e}</span>`;
+  }
+}
+
+async function clearGmailCreds() {
+  if (!confirm("Clear Gmail OAuth creds and revoke the stored refresh token?")) return;
+  const result = document.getElementById("gmail-result");
+  try {
+    await invoke("cmd_clear_gmail_oauth_creds");
+    result.innerHTML = '<span style="color:#16a34a;">&#10003; Gmail creds + refresh token cleared.</span>';
+    refreshGmailStatus();
+  } catch (e) {
+    result.innerHTML = `<span style="color:#dc2626;">Clear failed: ${e}</span>`;
+  }
+}
+
+async function connectGmail() {
+  const result = document.getElementById("gmail-result");
+  result.textContent = "Starting OAuth flow...";
+  try {
+    const begin = await invoke("cmd_begin_gmail_oauth");
+    // Use the Tauri shell plugin's open() to launch the browser. The
+    // user authenticates with Google, Google redirects to our local
+    // disposition server, we store the refresh token, and the user
+    // sees a "Gmail connected" page in the browser.
+    if (window.__TAURI__?.shell?.open) {
+      await window.__TAURI__.shell.open(begin.auth_url);
+    } else {
+      // Dev/fallback path
+      window.open(begin.auth_url, "_blank");
+    }
+    result.textContent = "Browser opened — complete consent there. Polling for completion...";
+    // Poll status every 2s for up to 5 min.
+    const deadline = Date.now() + 5 * 60 * 1000;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 2000));
+      const status = await invoke("cmd_poll_gmail_oauth_status", { csrfState: begin.csrf_state });
+      if (status.kind === "completed") {
+        result.innerHTML = '<span style="color:#16a34a;">&#10003; Gmail connected. Set a recipient + click Send test email.</span>';
+        refreshGmailStatus();
+        return;
+      }
+      if (status.kind === "failed") {
+        result.innerHTML = `<span style="color:#dc2626;">OAuth failed: ${escapeHtml(status.error)}</span>`;
+        return;
+      }
+    }
+    result.innerHTML = '<span style="color:#a16207;">Timed out waiting for OAuth (5 min). Try again.</span>';
+  } catch (e) {
+    result.innerHTML = `<span style="color:#dc2626;">Connect failed: ${e}</span>`;
+  }
+}
+
+async function disconnectGmail() {
+  if (!confirm("Disconnect Gmail? You can reconnect any time.")) return;
+  const result = document.getElementById("gmail-result");
+  try {
+    await invoke("cmd_disconnect_gmail");
+    result.innerHTML = '<span style="color:#16a34a;">&#10003; Refresh token revoked.</span>';
+    refreshGmailStatus();
+  } catch (e) {
+    result.innerHTML = `<span style="color:#dc2626;">Disconnect failed: ${e}</span>`;
+  }
+}
+
+async function saveRecipient() {
+  const result = document.getElementById("gmail-result");
+  const email = document.getElementById("gmail-recipient").value.trim();
+  try {
+    await invoke("cmd_set_recipient_email", { email });
+    result.innerHTML = '<span style="color:#16a34a;">&#10003; Recipient saved.</span>';
+    refreshGmailStatus();
+  } catch (e) {
+    result.innerHTML = `<span style="color:#dc2626;">Save failed: ${e}</span>`;
+  }
+}
+
+async function sendTestEmail() {
+  const result = document.getElementById("gmail-result");
+  result.textContent = "Sending test email (calls Gmail API)...";
+  try {
+    const msg = await invoke("cmd_send_test_email");
+    result.innerHTML = `<span style="color:#16a34a;">&#10003; ${escapeHtml(msg)}</span>`;
+  } catch (e) {
+    result.innerHTML = `<span style="color:#dc2626;">Send failed: ${e}</span>`;
+  }
+}
+
+document.getElementById("gmail-creds-save-btn")?.addEventListener("click", saveGmailCreds);
+document.getElementById("gmail-creds-clear-btn")?.addEventListener("click", clearGmailCreds);
+document.getElementById("gmail-connect-btn")?.addEventListener("click", connectGmail);
+document.getElementById("gmail-disconnect-btn")?.addEventListener("click", disconnectGmail);
+document.getElementById("gmail-recipient-save-btn")?.addEventListener("click", saveRecipient);
+document.getElementById("gmail-test-email-btn")?.addEventListener("click", sendTestEmail);
+
 loadCapability();
 loadCost();
 loadSettings();
 refreshApiKeyStatus();
 refreshPersonalizationStatus();
+refreshGmailStatus();
