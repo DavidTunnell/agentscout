@@ -140,22 +140,37 @@ jobs:
         if: runner.os == 'Windows' && env.AGENTSCOUT_ALLOW_MISSING_TESSERACT != '1'
         shell: pwsh
         run: |
+          # tesseract.exe on Windows is a thin (~80-100 KB) launcher
+          # that delegates to libtesseract-5.dll. The real "is OCR
+          # going to work" check is the DLL — we assert it's present
+          # and reasonably sized. We DO check tesseract.exe exists
+          # (it's the entry point we shell out to) but don't enforce
+          # a minimum size on it.
           $tessExe = "src-tauri\resources\tesseract\tesseract.exe"
           if (-not (Test-Path $tessExe)) {
             Write-Error "tesseract.exe missing from bundle staging dir — release would ship without OCR"
             exit 1
           }
-          $size = (Get-Item $tessExe).Length
-          if ($size -lt 1MB) {
-            Write-Error "tesseract.exe at $tessExe is only $size bytes (expected >1MB) — staging copy is corrupt"
+          $exeSize = (Get-Item $tessExe).Length
+
+          $libTess = "src-tauri\resources\tesseract\libtesseract-5.dll"
+          if (-not (Test-Path $libTess)) {
+            Write-Error "libtesseract-5.dll missing — the actual OCR engine wasn't bundled. tesseract.exe alone is just a wrapper and won't work without it."
             exit 1
           }
+          $libSize = (Get-Item $libTess).Length
+          if ($libSize -lt 2MB) {
+            Write-Error "libtesseract-5.dll at $libTess is only $libSize bytes (expected >2MB) — staging copy is corrupt"
+            exit 1
+          }
+
           $dlls = Get-ChildItem "src-tauri\resources\tesseract\*.dll"
-          if ($dlls.Count -lt 1) {
-            Write-Error "no DLLs staged — tesseract.exe will fail to launch on user machines without its deps"
+          if ($dlls.Count -lt 5) {
+            Write-Error "only $($dlls.Count) DLL(s) staged — choco's tesseract distribution normally includes 30+ DLLs. Bundle is incomplete."
             exit 1
           }
-          Write-Host "Bundle OK: tesseract.exe $size bytes + $($dlls.Count) DLL(s)"
+          $totalDllBytes = ($dlls | Measure-Object -Property Length -Sum).Sum
+          Write-Host "Bundle OK: tesseract.exe ($exeSize bytes) + libtesseract-5.dll ($libSize bytes) + $($dlls.Count) total DLLs ($totalDllBytes bytes total)"
 
       # tauri's macOS bundler tries to sign whenever APPLE_CERTIFICATE
       # is set, even to an empty string. We split into two steps so the
