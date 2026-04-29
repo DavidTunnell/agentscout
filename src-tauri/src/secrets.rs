@@ -37,6 +37,18 @@ const ACCOUNT_GMAIL_OAUTH_CLIENT_SECRET: &str = "gmail-oauth-client-secret";
 /// in `email/oauth.rs` so legacy installs that already had a working
 /// keychain read the same value.
 const ACCOUNT_GMAIL_REFRESH: &str = "gmail-refresh-v1";
+/// File-encryption DEK (32 bytes hex-encoded). Account name matches
+/// the original `KEYCHAIN_USER_DEK` in `storage/crypto.rs` so legacy
+/// installs that DID get a working keychain write read the same value.
+/// Most installs since v0.5.5 silently failed to write because of the
+/// keyring + Tauri tokio bug — they generated ephemeral per-session
+/// DEKs and now have undecryptable old captures. v0.5.16 wires this
+/// path through the spawn_blocking + verify + fallback infrastructure
+/// so the DEK is stable across restarts.
+const ACCOUNT_FILE_ENCRYPTION_DEK: &str = "file-dek-v1";
+/// HMAC install secret used by the disposition link signer. Same
+/// silent-no-op pattern; same fix.
+const ACCOUNT_INSTALL_SECRET: &str = "install-secret-v1";
 
 const FALLBACK_DIR: &str = ".secrets";
 const FALLBACK_MASTER_FILENAME: &str = ".master";
@@ -363,6 +375,33 @@ pub async fn clear_gmail_refresh_token() -> Result<()> {
 
 pub async fn has_gmail_refresh_token() -> bool {
     matches!(get_gmail_refresh_token().await, Ok(Some(_)))
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.16 — File-encryption DEK + install secret
+// (moved out of storage/crypto.rs which had the same silent-no-op bug)
+// ───────────────────────────────────────────────────────────────────────
+
+pub async fn set_file_encryption_dek(hex_key: &str) -> Result<()> {
+    if hex_key.trim().is_empty() {
+        anyhow::bail!("file encryption DEK cannot be empty");
+    }
+    store_secret_async(ACCOUNT_FILE_ENCRYPTION_DEK, hex_key.trim().to_string()).await
+}
+
+pub async fn get_file_encryption_dek() -> Result<Option<String>> {
+    load_secret_async(ACCOUNT_FILE_ENCRYPTION_DEK).await
+}
+
+pub async fn set_install_secret(hex_secret: &str) -> Result<()> {
+    if hex_secret.trim().is_empty() {
+        anyhow::bail!("install secret cannot be empty");
+    }
+    store_secret_async(ACCOUNT_INSTALL_SECRET, hex_secret.trim().to_string()).await
+}
+
+pub async fn get_install_secret() -> Result<Option<String>> {
+    load_secret_async(ACCOUNT_INSTALL_SECRET).await
 }
 
 // ───────────────────────────────────────────────────────────────────────

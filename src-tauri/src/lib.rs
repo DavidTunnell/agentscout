@@ -105,7 +105,34 @@ pub fn run() {
 async fn bootstrap(app: AppHandle) -> Result<()> {
     let config = Arc::new(Mutex::new(Config::load_or_init()?));
     let storage = Arc::new(Storage::open()?);
-    let crypto = Arc::new(FileCrypto::load_or_init()?);
+
+    // v0.5.16: FileCrypto::load_or_init returns a flag indicating
+    // whether the DEK was just freshly generated. If true, the user
+    // is on first launch under v0.5.16 and any pre-existing captures
+    // were encrypted with ephemeral DEKs (the silent-no-op bug —
+    // see crate::secrets and src/storage/crypto.rs comments). Those
+    // captures cannot be decrypted, so we wipe them on the user's
+    // confirmation (which they gave when picking "auto-delete on boot"
+    // for v0.5.16).
+    let crypto_init = FileCrypto::load_or_init().await?;
+    let crypto = Arc::new(crypto_init.crypto);
+    if crypto_init.fresh_dek {
+        match cleanup_undecryptable_captures(&storage).await {
+            Ok(n) if n > 0 => info!(
+                "v0.5.16 first-boot cleanup: removed {} captures encrypted with prior \
+                 ephemeral DEKs (the silent-no-op keychain bug). New captures from now \
+                 on will persist correctly across restarts.",
+                n
+            ),
+            Ok(_) => {
+                info!("v0.5.16 first-boot: fresh DEK generated, no prior captures to clean")
+            }
+            Err(e) => warn!(
+                "cleanup of pre-v0.5.16 captures failed (non-fatal): {:#}",
+                e
+            ),
+        }
+    }
 
     let poll_interval = Duration::from_secs(10);
     let (activity, _handle) = ActivityMonitor::start(poll_interval);
@@ -124,7 +151,7 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
     let paused = scheduler.pause_handle();
 
     // Disposition server + HMAC link signer using the per-install secret.
-    let install_secret = crate::storage::crypto::load_or_init_install_secret()?;
+    let install_secret = crate::storage::crypto::load_or_init_install_secret().await?;
     let link_signer = Arc::new(LinkSigner::new(install_secret));
     let disposition = start_disposition_server(
         storage.clone(),
@@ -303,6 +330,81 @@ async fn run_auto_cycle(
         result.n_recommendations, result.n_visible, result.estimated_cost_usd
     );
     Ok(())
+}
+
+/// Wipe captures encrypted with a prior session's ephemeral DEK.
+/// Called by bootstrap when `FileCrypto::load_or_init` returns
+/// `fresh_dek = true` — meaning a brand-new DEK was just generated
+/// because no prior DEK was reachable in storage. Pre-v0.5.16 installs
+/// silently failed to persist DEKs (keyring + Tauri tokio bug), so the
+/// user has accumulated `.enc` files encrypted with various ephemeral
+/// keys. Those files are unrecoverable; this function cleans them up
+/// so the Inspector tab doesn't show "AES-GCM decrypt failed" errors
+/// on every old row.
+///
+/// What gets deleted:
+/// - All `.enc` files in `<storage>/screenshots/`
+/// - All `.enc` files in `<storage>/thumbnails/`
+/// - All rows in the `captures` table (and `skip_log`, since they're
+///   timestamped together)
+///
+/// What is preserved:
+/// - `recommendations` (text content the user might want to keep)
+/// - `clusters` (orphan but harmless)
+/// - `cycles` (history)
+/// - `user-profile.md`, `tier-definitions.json`, `config.json`
+/// - Keychain / fallback secrets
+async fn cleanup_undecryptable_captures(storage: &Arc<Storage>) -> Result<usize> {
+    let storage_root = storage.root().to_path_buf();
+
+    // Count rows before delete so we can return how much we cleaned.
+    let pre_count: i64 = storage
+        .with_conn(|c| Ok(c.query_row("SELECT COUNT(*) FROM captures", [], |r| r.get(0))?))
+        .unwrap_or(0);
+
+    if pre_count == 0 {
+        return Ok(0);
+    }
+
+    // Delete file artifacts. Best-effort — log but don't fail the boot
+    // if a single file is held open or has weird permissions.
+    for subdir in ["screenshots", "thumbnails"] {
+        let dir = storage_root.join(subdir);
+        if !dir.exists() {
+            continue;
+        }
+        match std::fs::read_dir(&dir) {
+            Ok(entries) => {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    if path.extension().and_then(|s| s.to_str()) == Some("enc") {
+                        if let Err(e) = std::fs::remove_file(&path) {
+                            warn!(
+                                "cleanup: failed to remove {} ({:#}); leaving in place",
+                                path.display(),
+                                e
+                            );
+                        }
+                    }
+                }
+            }
+            Err(e) => warn!(
+                "cleanup: could not read {} ({:#}); skipping subdir",
+                dir.display(),
+                e
+            ),
+        }
+    }
+
+    // Truncate the captures + skip_log tables. Run inside a single
+    // transaction so a partial failure doesn't leave orphans.
+    storage.with_conn(|c| {
+        c.execute("DELETE FROM captures", [])?;
+        c.execute("DELETE FROM skip_log", [])?;
+        Ok(())
+    })?;
+
+    Ok(pre_count as usize)
 }
 
 /// Move the running disposition server into a static slot so its tokio

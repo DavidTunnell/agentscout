@@ -7,9 +7,18 @@ use rand::RngCore;
 use sha2::Sha256;
 use std::path::Path;
 
+// v0.5.16: DEK + install secret moved to crate::secrets which has the
+// spawn_blocking + verify-after-write + encrypted-file-fallback pattern
+// from v0.5.9. The KEYCHAIN_SERVICE / KEYCHAIN_USER_DEK / KEYCHAIN_USER_INSTALL_SECRET
+// constants are gone — see secrets::ACCOUNT_FILE_ENCRYPTION_DEK and
+// secrets::ACCOUNT_INSTALL_SECRET (same names, secrets module owns
+// the values).
+//
+// Passphrase-related keys (wrapped DEK + salt) still live here because
+// they're still spec'd as keyring-stored and the v1 passphrase path
+// is opt-in / off by default. Migration to secrets module deferred
+// until that path is exercised in real dogfood.
 const KEYCHAIN_SERVICE: &str = "AgentScout";
-const KEYCHAIN_USER_DEK: &str = "file-dek-v1";
-const KEYCHAIN_USER_INSTALL_SECRET: &str = "install-secret-v1";
 const KEYCHAIN_USER_PASSPHRASE_SALT: &str = "passphrase-salt-v1";
 const KEYCHAIN_USER_WRAPPED_DEK: &str = "wrapped-dek-v1";
 const NONCE_LEN: usize = 12;
@@ -22,33 +31,49 @@ pub struct FileCrypto {
     cipher: Aes256Gcm,
 }
 
-impl FileCrypto {
-    pub fn load_or_init() -> Result<Self> {
-        let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_DEK)
-            .context("creating keychain entry for DEK")?;
+/// Result of [`FileCrypto::load_or_init`]. Carries a flag indicating
+/// whether the DEK was just freshly generated — bootstrap uses this to
+/// detect "the user is upgrading from a pre-v0.5.16 install whose
+/// silent-no-op DEK writes meant prior captures encrypted with
+/// ephemeral keys" and clean up the stale `.enc` files.
+pub struct FileCryptoInit {
+    pub crypto: FileCrypto,
+    pub fresh_dek: bool,
+}
 
-        let key_bytes = match entry.get_password() {
-            Ok(hex_key) => hex::decode(hex_key).context("decoding DEK from keychain")?,
-            Err(keyring::Error::NoEntry) => {
+impl FileCrypto {
+    /// Load the file-encryption DEK from `crate::secrets` (which routes
+    /// through keychain-with-fallback) or generate + persist a fresh
+    /// one if none is stored. Returns the cipher plus a `fresh_dek`
+    /// flag for the caller to handle cleanup.
+    pub async fn load_or_init() -> Result<FileCryptoInit> {
+        let (key_bytes, fresh_dek) = match crate::secrets::get_file_encryption_dek().await? {
+            Some(hex_key) => {
+                let bytes = hex::decode(&hex_key).context("decoding DEK from secrets storage")?;
+                (bytes, false)
+            }
+            None => {
                 let mut key = [0u8; 32];
                 rand::thread_rng().fill_bytes(&mut key);
-                entry
-                    .set_password(&hex::encode(key))
-                    .context("writing new DEK to keychain")?;
-                key.to_vec()
+                crate::secrets::set_file_encryption_dek(&hex::encode(key))
+                    .await
+                    .context("writing new DEK to secrets storage")?;
+                (key.to_vec(), true)
             }
-            Err(e) => return Err(anyhow!(e)).context("reading DEK from keychain"),
         };
 
         if key_bytes.len() != 32 {
             anyhow::bail!(
-                "DEK in keychain has unexpected length {} (expected 32)",
+                "DEK in secrets storage has unexpected length {} (expected 32)",
                 key_bytes.len()
             );
         }
 
         let cipher = Aes256Gcm::new(Key::<Aes256Gcm>::from_slice(&key_bytes));
-        Ok(Self { cipher })
+        Ok(FileCryptoInit {
+            crypto: Self { cipher },
+            fresh_dek,
+        })
     }
 
     /// Construct a FileCrypto with an explicit 32-byte key. Bypasses the
@@ -225,21 +250,32 @@ pub fn unwrap_dek_with_passphrase(wrapped_hex: &str, passphrase: &str) -> Result
     Ok(out)
 }
 
-pub fn load_or_init_install_secret() -> Result<Vec<u8>> {
-    let entry = Entry::new(KEYCHAIN_SERVICE, KEYCHAIN_USER_INSTALL_SECRET)
-        .context("creating keychain entry for install secret")?;
-    match entry.get_password() {
-        Ok(hex_secret) => hex::decode(hex_secret).context("decoding install secret from keychain"),
-        Err(keyring::Error::NoEntry) => {
+/// v0.5.16: install secret moved to `crate::secrets`. Same silent-no-op
+/// fix pattern as the file DEK. The HMAC link signer needs this to be
+/// stable across restarts so disposition links from yesterday's email
+/// remain valid for 60 days.
+pub async fn load_or_init_install_secret() -> Result<Vec<u8>> {
+    let secret_bytes = match crate::secrets::get_install_secret().await? {
+        Some(hex_secret) => {
+            hex::decode(&hex_secret).context("decoding install secret from secrets storage")?
+        }
+        None => {
             let mut secret = [0u8; 32];
             rand::thread_rng().fill_bytes(&mut secret);
-            entry
-                .set_password(&hex::encode(secret))
-                .context("writing new install secret to keychain")?;
-            Ok(secret.to_vec())
+            crate::secrets::set_install_secret(&hex::encode(secret))
+                .await
+                .context("writing new install secret to secrets storage")?;
+            secret.to_vec()
         }
-        Err(e) => Err(anyhow!(e)).context("reading install secret from keychain"),
+    };
+
+    if secret_bytes.len() != 32 {
+        anyhow::bail!(
+            "install secret has unexpected length {} (expected 32)",
+            secret_bytes.len()
+        );
     }
+    Ok(secret_bytes)
 }
 
 #[cfg(test)]
