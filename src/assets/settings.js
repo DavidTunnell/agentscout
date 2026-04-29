@@ -58,7 +58,7 @@ async function loadCapability() {
       if (cap.degraded_notice) parts.push(cap.degraded_notice);
       if (!cap.tesseract_available) {
         parts.push(
-          "Tesseract isn't installed — budget mode will fall back to mock OCR (empty text). Install from https://github.com/UB-Mannheim/tesseract/wiki (Windows), `brew install tesseract` (macOS), or your package manager."
+          "Tesseract isn't installed. This is optional — only Budget Mode (in Capture settings) uses OCR. Default mode sends the full screenshot to Claude's vision API and works without it. To enable Budget Mode: `brew install tesseract` (macOS), `apt install tesseract-ocr` (Linux). Windows installers from v0.5.10+ ship Tesseract bundled — if you're on Windows and seeing this notice, your install may be older or the bundled binary failed to copy."
         );
       }
       text.textContent = parts.join(" ");

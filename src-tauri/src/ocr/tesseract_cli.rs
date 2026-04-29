@@ -136,6 +136,20 @@ impl OcrEngine for TesseractCliEngine {
 }
 
 fn which_tesseract() -> Result<PathBuf> {
+    // 1. **Bundled Tesseract** (v0.5.10+): on Windows the MSI ships
+    //    `tesseract.exe` + DLLs alongside `agentscout.exe` under
+    //    `resources/tesseract/`. Check there first so users don't have
+    //    to install Tesseract themselves.
+    if let Some(bundled) = bundled_tesseract_path() {
+        if bundled.exists() {
+            return Ok(bundled);
+        }
+    }
+
+    // 2. **Common install locations + PATH** (existing fallback). Lets
+    //    `cargo run` in dev work, lets Linux .deb users get the system
+    //    package, and lets macOS users with `brew install tesseract`
+    //    work without us bundling on macOS.
     let candidates = if cfg!(windows) {
         vec![
             "tesseract.exe",
@@ -165,8 +179,25 @@ fn which_tesseract() -> Result<PathBuf> {
     }
 
     Err(anyhow!(
-        "tesseract not found in PATH or common install locations"
+        "tesseract not found in PATH, common install locations, or bundled resources"
     ))
+}
+
+/// Resolve the path to the Tesseract binary bundled inside the AgentScout
+/// installation. Tauri 2's `bundle.resources` config copies
+/// `src-tauri/resources/tesseract/*` to `<install_dir>/resources/tesseract/`
+/// at install time. We compute the path by walking up from
+/// `current_exe()` rather than using Tauri's `app.path().resource_dir()`
+/// because OCR runs in the scheduler context which has no AppHandle.
+fn bundled_tesseract_path() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let parent = exe.parent()?;
+    let filename = if cfg!(windows) {
+        "tesseract.exe"
+    } else {
+        "tesseract"
+    };
+    Some(parent.join("resources").join("tesseract").join(filename))
 }
 
 fn which(name: &str) -> Result<PathBuf> {

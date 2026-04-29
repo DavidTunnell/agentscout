@@ -86,6 +86,45 @@ jobs:
       - name: npm install (Tauri CLI)
         run: npm install
 
+      # v0.5.10: Bundle Tesseract on Windows so users don't have to
+      # install it separately. Choco's `tesseract` package is the
+      # UB-Mannheim distribution. We copy tesseract.exe + the DLLs it
+      # needs into src-tauri/resources/tesseract/ where tauri-bundler's
+      # `bundle.resources` config picks them up. macOS and Linux are
+      # handled differently:
+      #   - Linux: .deb declares tesseract-ocr as a dependency
+      #   - macOS: users `brew install tesseract` (deferred to v1.x)
+      - name: Install Tesseract via Chocolatey (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: choco install tesseract --no-progress -y --version=5.5.0.20241111
+        continue-on-error: true
+
+      - name: Stage Tesseract binaries for bundling (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dest = "src-tauri\resources\tesseract"
+          New-Item -ItemType Directory -Force -Path $dest | Out-Null
+
+          $candidates = @(
+            "C:\Program Files\Tesseract-OCR",
+            "C:\ProgramData\chocolatey\lib\tesseract\tools\Tesseract-OCR",
+            "C:\Program Files (x86)\Tesseract-OCR"
+          )
+          $tess = $candidates | Where-Object { Test-Path "$_\tesseract.exe" } | Select-Object -First 1
+          if (-not $tess) {
+            Write-Warning "Tesseract not found after choco install — bundle will skip"
+            exit 0
+          }
+          Write-Host "Copying Tesseract from $tess"
+          Copy-Item "$tess\tesseract.exe" $dest -Force
+          # Bundle the DLLs that tesseract.exe links against. Use a
+          # dependency walker would be ideal but choco's distribution
+          # ships the relevant ones flat in the install dir.
+          Copy-Item "$tess\*.dll" $dest -Force -ErrorAction SilentlyContinue
+          Get-ChildItem $dest | Format-Table Name, Length
+
       # tauri's macOS bundler tries to sign whenever APPLE_CERTIFICATE
       # is set, even to an empty string. We split into two steps so the
       # signing path is only taken when the secret is actually populated.
