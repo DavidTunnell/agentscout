@@ -86,6 +86,8 @@ pub fn run() {
             cmd_disconnect_gmail,
             cmd_set_recipient_email,
             cmd_send_test_email,
+            // v0.5.8: system health
+            cmd_get_system_health,
         ])
         .setup(|app| {
             let handle = app.handle().clone();
@@ -135,6 +137,11 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
     info!("disposition server listening at {}", disposition_origin);
     keep_disposition_server_alive(disposition);
 
+    // Clone everything the auto-cycle loop needs BEFORE we move
+    // `state` into Tauri's managed-state container.
+    let auto_cycle_link_signer = link_signer.clone();
+    let auto_cycle_origin = disposition_origin.clone();
+
     let state = AppState {
         config: config.clone(),
         storage: storage.clone(),
@@ -156,7 +163,144 @@ async fn bootstrap(app: AppHandle) -> Result<()> {
         sched_for_run.run().await;
     });
 
+    // v0.5.8: spawn the auto-cycle loop. Polls active-hours state every
+    // minute. When threshold crossed AND anthropic key is set, fires a
+    // background run_cycle on a tokio task. After the cycle, the
+    // orchestrator resets the counter so the loop won't re-fire until
+    // another N hours of active capture have accrued.
+    let auto_cycle_state_storage = storage.clone();
+    let auto_cycle_state_config = config.clone();
+    tauri::async_runtime::spawn(async move {
+        auto_cycle_loop(
+            auto_cycle_state_storage,
+            auto_cycle_state_config,
+            auto_cycle_link_signer,
+            auto_cycle_origin,
+        )
+        .await;
+    });
+
     info!("agentscout bootstrap complete");
+    Ok(())
+}
+
+/// Polls active-hours state every minute. When (active_seconds >=
+/// threshold) AND an Anthropic key is set AND no cycle is currently
+/// running, fires a background `run_cycle()`. The orchestrator's
+/// reset_active_hours() at the end of the cycle naturally implements
+/// the "don't fire again until another threshold's worth of activity"
+/// behavior.
+async fn auto_cycle_loop(
+    storage: Arc<Storage>,
+    config: Arc<Mutex<Config>>,
+    link_signer: Arc<LinkSigner>,
+    server_origin: String,
+) {
+    let mut interval = tokio::time::interval(Duration::from_secs(60));
+    interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+
+    // Re-entrancy guard: if a cycle is already running (network hiccup
+    // makes it slow), don't kick off a second one. Plain AtomicBool is
+    // fine because we only ever toggle it from this task.
+    use std::sync::atomic::AtomicBool;
+    let in_progress = Arc::new(AtomicBool::new(false));
+
+    loop {
+        interval.tick().await;
+        if in_progress.load(std::sync::atomic::Ordering::SeqCst) {
+            continue;
+        }
+
+        let threshold_seconds = {
+            let cfg = config.lock().await;
+            i64::from(cfg.analysis.active_hours_threshold) * 3600
+        };
+        let active = match storage.load_active_hours() {
+            Ok(s) => s,
+            Err(e) => {
+                warn!("auto_cycle_loop: load_active_hours failed: {:#}", e);
+                continue;
+            }
+        };
+        if active.active_seconds < threshold_seconds {
+            continue;
+        }
+        if !crate::secrets::has_anthropic_key() {
+            // Threshold reached but no key — log once per loop tick at
+            // info so the user sees this in logs and we don't spin.
+            info!(
+                "auto-cycle threshold reached ({}s >= {}s) but no Anthropic key set; \
+                 cycle deferred",
+                active.active_seconds, threshold_seconds
+            );
+            continue;
+        }
+
+        info!(
+            "auto-cycle firing: active {}s >= threshold {}s",
+            active.active_seconds, threshold_seconds
+        );
+        in_progress.store(true, std::sync::atomic::Ordering::SeqCst);
+        let s = storage.clone();
+        let c = config.clone();
+        let signer = link_signer.clone();
+        let origin = server_origin.clone();
+        let guard = in_progress.clone();
+        tauri::async_runtime::spawn(async move {
+            if let Err(e) = run_auto_cycle(s, c, signer, origin).await {
+                warn!("auto-cycle failed: {:#}", e);
+            }
+            guard.store(false, std::sync::atomic::Ordering::SeqCst);
+        });
+    }
+}
+
+/// One-shot cycle invocation used by `auto_cycle_loop`. Mirrors what
+/// `cmd_run_cycle_now` does but without the retag-by-hours step (the
+/// active-hours counter and `current_cycle_id` are already correct).
+async fn run_auto_cycle(
+    storage: Arc<Storage>,
+    config: Arc<Mutex<Config>>,
+    link_signer: Arc<LinkSigner>,
+    server_origin: String,
+) -> Result<()> {
+    let api_key = crate::secrets::get_anthropic_key()?
+        .ok_or_else(|| anyhow::anyhow!("no anthropic api key"))?;
+    let cfg_owned: Config = {
+        let cfg = config.lock().await;
+        cfg.clone()
+    };
+    let live = LiveAnthropicClient::new(api_key);
+    let gmail_sender = crate::email::GmailSender::new();
+    let access_token = try_fresh_gmail_access_token(&server_origin).await.ok();
+    let (email_arg, token_arg): (Option<&dyn crate::email::EmailSender>, Option<String>) =
+        match access_token {
+            Some(tok) => (Some(&gmail_sender), Some(tok.token)),
+            None => (None, None),
+        };
+
+    let storage_root = storage.root().to_path_buf();
+    let user_profile_md = std::fs::read_to_string(storage_root.join("user-profile.md"))
+        .unwrap_or_else(|_| DEFAULT_USER_PROFILE_MD.to_string());
+    let tier_definitions_json = std::fs::read_to_string(storage_root.join("tier-definitions.json"))
+        .unwrap_or_else(|_| DEFAULT_TIER_DEFINITIONS_JSON.to_string());
+
+    let deps = OrchestratorDeps {
+        config: &cfg_owned,
+        storage: storage.clone(),
+        anthropic: &live,
+        email: email_arg,
+        link_signer,
+        gmail_access_token: token_arg,
+        server_origin,
+        user_profile_md,
+        tier_definitions_json,
+    };
+    let result = run_cycle(deps).await?;
+    info!(
+        "auto-cycle completed: {} recs ({} visible) for ${:.4}",
+        result.n_recommendations, result.n_visible, result.estimated_cost_usd
+    );
     Ok(())
 }
 
@@ -719,6 +863,177 @@ async fn cmd_run_cycle_now(
         n_suppressed: result.n_suppressed,
         estimated_cost_usd: result.estimated_cost_usd,
         email_sent: result.email_message_id.is_some(),
+    })
+}
+
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.8 — System health (auto-trigger lives in bootstrap)
+// ───────────────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct HealthRow {
+    name: String,
+    /// "pass" | "warn" | "fail"
+    status: &'static str,
+    message: String,
+}
+
+#[derive(serde::Serialize)]
+struct HealthReport {
+    /// Overall status — worst of any subsystem.
+    overall: &'static str,
+    rows: Vec<HealthRow>,
+    /// Convenience: same numbers the auto-cycle loop is comparing.
+    active_seconds: i64,
+    threshold_seconds: i64,
+    cycle_id: String,
+}
+
+#[tauri::command]
+async fn cmd_get_system_health(state: State<'_, AppState>) -> Result<HealthReport, String> {
+    let mut rows: Vec<HealthRow> = Vec::new();
+    let mut overall: &'static str = "pass";
+
+    // Capture loop — proxied by "is the scheduler actually advancing
+    // active_hours?". If active_seconds is still 0 ten minutes after
+    // boot, something's wrong (paused, blocklist hit, gates failing).
+    // For now we just report active_hours; the user can see if it's
+    // moving.
+    let active = state
+        .storage
+        .load_active_hours()
+        .map_err(|e| format!("{:#}", e))?;
+    let paused = state.paused.load(std::sync::atomic::Ordering::SeqCst);
+    let cap_status: &'static str = if paused { "warn" } else { "pass" };
+    let cap_msg = if paused {
+        "Capture paused — toggle on the Status tab or tray menu.".into()
+    } else {
+        format!(
+            "Active hours: {:.2}h (cycle {}s elapsed, started {})",
+            active.active_seconds as f64 / 3600.0,
+            active.active_seconds,
+            chrono::DateTime::from_timestamp(active.cycle_started_at, 0)
+                .map(|d| d.format("%Y-%m-%d %H:%M").to_string())
+                .unwrap_or_else(|| "?".into()),
+        )
+    };
+    if cap_status == "warn" && overall == "pass" {
+        overall = "warn";
+    }
+    rows.push(HealthRow {
+        name: "Capture loop".into(),
+        status: cap_status,
+        message: cap_msg,
+    });
+
+    // Anthropic key
+    let has_key = crate::secrets::has_anthropic_key();
+    if !has_key {
+        overall = "fail";
+    }
+    rows.push(HealthRow {
+        name: "Anthropic API key".into(),
+        status: if has_key { "pass" } else { "fail" },
+        message: if has_key {
+            "Set in keychain.".into()
+        } else {
+            "Not set — open Settings → paste your key. Cycles cannot run without it.".into()
+        },
+    });
+
+    // Gmail — fully connected when both creds and refresh token exist;
+    // partial / missing both are equally "warn" since email is optional.
+    let has_creds = crate::secrets::has_gmail_oauth_creds();
+    let has_refresh = crate::email::has_stored_refresh_token().unwrap_or(false);
+    let gmail_status: &'static str = if has_creds && has_refresh {
+        "pass"
+    } else {
+        "warn"
+    };
+    if gmail_status == "warn" && overall == "pass" {
+        overall = "warn";
+    }
+    let gmail_msg = match (has_creds, has_refresh) {
+        (true, true) => "Connected (OAuth client + refresh token).".into(),
+        (true, false) => "OAuth client set but Gmail not connected — click Connect Gmail in Settings.".into(),
+        (false, true) => "Stale refresh token without client creds — Disconnect + reconfigure.".into(),
+        (false, false) => "Optional. Without Gmail, cycles run analysis-only (recommendations land in the Recommendations tab; no email).".into(),
+    };
+    rows.push(HealthRow {
+        name: "Gmail (email delivery)".into(),
+        status: gmail_status,
+        message: gmail_msg,
+    });
+
+    // Personalization (user-profile.md, tier-definitions.json)
+    let storage_root = state.storage.root().to_path_buf();
+    let has_profile = storage_root.join("user-profile.md").exists();
+    let has_tiers = storage_root.join("tier-definitions.json").exists();
+    let pers_status: &'static str = if has_profile && has_tiers {
+        "pass"
+    } else {
+        "warn"
+    };
+    if pers_status == "warn" && overall == "pass" {
+        overall = "warn";
+    }
+    let pers_msg = match (has_profile, has_tiers) {
+        (true, true) => "Both user-profile.md and tier-definitions.json exist.".into(),
+        (true, false) => {
+            "user-profile.md exists; tier-definitions.json missing. Run tier calibration.".into()
+        }
+        (false, true) => "tier-definitions.json exists but user-profile.md missing.".into(),
+        (false, false) => {
+            "Optional. Recommendations work with defaults but are less personalized.".into()
+        }
+    };
+    rows.push(HealthRow {
+        name: "Personalization".into(),
+        status: pers_status,
+        message: pers_msg,
+    });
+
+    // Disposition server reachable on its own loopback origin.
+    let origin = state.disposition_server_origin.clone();
+    let disp_status: &'static str;
+    let disp_msg: String;
+    match reqwest::Client::new()
+        .get(format!("{origin}/health"))
+        .timeout(Duration::from_secs(2))
+        .send()
+        .await
+    {
+        Ok(r) if r.status().is_success() => {
+            disp_status = "pass";
+            disp_msg = format!("Listening at {origin}");
+        }
+        Ok(r) => {
+            disp_status = "fail";
+            disp_msg = format!("Listening but health endpoint returned {}", r.status());
+        }
+        Err(e) => {
+            disp_status = "fail";
+            disp_msg = format!("{origin} unreachable: {:#}", e);
+        }
+    }
+    if disp_status == "fail" {
+        overall = "fail";
+    }
+    rows.push(HealthRow {
+        name: "Disposition server".into(),
+        status: disp_status,
+        message: disp_msg,
+    });
+
+    let cfg = state.config.lock().await;
+    let threshold_seconds = i64::from(cfg.analysis.active_hours_threshold) * 3600;
+
+    Ok(HealthReport {
+        overall,
+        rows,
+        active_seconds: active.active_seconds,
+        threshold_seconds,
+        cycle_id: active.current_cycle_id,
     })
 }
 

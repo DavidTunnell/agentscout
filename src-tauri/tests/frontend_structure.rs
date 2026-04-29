@@ -187,6 +187,8 @@ fn js_files_invoke_only_known_tauri_commands() {
         "cmd_disconnect_gmail",
         "cmd_set_recipient_email",
         "cmd_send_test_email",
+        // v0.5.8
+        "cmd_get_system_health",
     ];
     for js in ["app.js", "review.js", "inspector.js", "settings.js"] {
         let body = read_js(js);

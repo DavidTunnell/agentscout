@@ -98,7 +98,55 @@ async function runCycleNow() {
 
 document.getElementById("run-cycle-btn")?.addEventListener("click", runCycleNow);
 
+// ───────────────────────────────────────────────────────────────────────
+// v0.5.8 — System health table
+// ───────────────────────────────────────────────────────────────────────
+
+function statusBadge(status) {
+  const colors = {
+    pass: { bg: "#16a34a", text: "PASS" },
+    warn: { bg: "#a16207", text: "WARN" },
+    fail: { bg: "#dc2626", text: "FAIL" },
+  };
+  const c = colors[status] || { bg: "#6b7280", text: "?" };
+  return `<span style="display:inline-block; min-width: 44px; text-align: center; background: ${c.bg}; color: white; padding: 2px 8px; border-radius: 3px; font-size: 11px; font-weight: 600;">${c.text}</span>`;
+}
+
+function escapeHtmlInline(s) {
+  return (s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+async function refreshHealth() {
+  if (!invoke) return;
+  const summary = document.getElementById("health-summary");
+  const rowsEl = document.getElementById("health-rows");
+  if (!summary || !rowsEl) return;
+  try {
+    const h = await invoke("cmd_get_system_health");
+    summary.innerHTML = `Overall: ${statusBadge(h.overall)} · Active hours: <strong>${(h.active_seconds / 3600).toFixed(2)}h</strong> / ${(h.threshold_seconds / 3600).toFixed(1)}h threshold (cycle <code>${h.cycle_id.slice(0, 8)}…</code>)`;
+    rowsEl.innerHTML = h.rows
+      .map(
+        (r) => `
+        <div style="display: flex; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); align-items: flex-start;">
+          <div style="min-width: 60px;">${statusBadge(r.status)}</div>
+          <div style="flex: 1;">
+            <div style="font-weight: 500;">${escapeHtmlInline(r.name)}</div>
+            <div class="muted" style="font-size: 12px; margin-top: 2px;">${escapeHtmlInline(r.message)}</div>
+          </div>
+        </div>
+      `
+      )
+      .join("");
+  } catch (e) {
+    summary.textContent = `Health check failed: ${e}`;
+  }
+}
+
 refreshStatus();
 refreshSetupBadge();
+refreshHealth();
 setInterval(refreshStatus, 5000);
 setInterval(refreshSetupBadge, 30000);
+setInterval(refreshHealth, 15000);
