@@ -115,7 +115,13 @@ pub async fn synthesize_recommendations(
         messages: &messages,
         system: Some(SYNTHESIS_SYSTEM_PREFIX),
         model: &model,
-        max_tokens: 4096,
+        // v0.5.17: bumped from 4096 → 16384. Real-world dogfood (with
+        // 14 clusters and detailed starter_scaffold code in each
+        // recommendation) hit the 4096 cap mid-9th-recommendation and
+        // failed JSON parse on the truncated output. 16K leaves
+        // comfortable headroom for ~30+ rich recommendations and is
+        // well within Sonnet/Opus output limits (64K+).
+        max_tokens: 16384,
         // System prompt is the cacheable static prefix; the user message
         // (with cluster summaries) varies per cycle. Cache breakpoint is
         // therefore on message index 0 if there were a "static" message —
@@ -137,8 +143,30 @@ pub async fn synthesize_recommendations(
 /// in the input — otherwise it's hallucinated and we drop the entry.
 fn parse_recommendations(raw: &str, input: &SynthesisInput) -> Result<Vec<Recommendation>> {
     let json_str = strip_markdown_fence(raw);
-    let parsed: serde_json::Value = serde_json::from_str(&json_str)
-        .with_context(|| format!("synthesis output isn't valid JSON: {raw}"))?;
+    let parsed: serde_json::Value = match serde_json::from_str(&json_str) {
+        Ok(v) => v,
+        Err(parse_err) => {
+            // Salvage path (v0.5.17): Anthropic occasionally truncates
+            // output mid-string when max_tokens is exhausted. We keep
+            // the prefix that ends at the last complete top-level
+            // object inside the array. Drops the partial last
+            // recommendation; the rest still ship.
+            match salvage_truncated_array(&json_str) {
+                Some(salvaged) => {
+                    tracing::warn!(
+                        "synthesis output truncated (likely max_tokens hit); salvaged a \
+                         valid prefix and dropped the partial last recommendation. \
+                         Original parse error: {parse_err}"
+                    );
+                    salvaged
+                }
+                None => {
+                    return Err(anyhow::anyhow!("synthesis output isn't valid JSON: {raw}"))
+                        .with_context(|| format!("serde error: {parse_err}"));
+                }
+            }
+        }
+    };
     let arr = parsed
         .as_array()
         .ok_or_else(|| anyhow::anyhow!("synthesis output must be a JSON array"))?;
@@ -230,6 +258,63 @@ fn strip_markdown_fence(raw: &str) -> String {
         return rest.trim_end_matches("```").trim().to_string();
     }
     trimmed.to_string()
+}
+
+/// When Anthropic's output is truncated mid-string (max_tokens exhausted
+/// inside a recommendation), the resulting JSON array is unparseable.
+/// This walks the string with brace-counting + string-aware escape
+/// handling, finds the last position where we just closed a top-level
+/// object inside the array, and returns a fresh `[…]` containing
+/// everything up to that close. Drops the in-flight final entry; the
+/// rest of the recommendations still ship.
+///
+/// Returns `None` when there's no salvageable prefix (e.g. output is
+/// truncated before the first complete object closes).
+fn salvage_truncated_array(raw: &str) -> Option<serde_json::Value> {
+    let s = raw.trim();
+    if !s.starts_with('[') {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut brace_depth = 0i32;
+    let mut bracket_depth = 0i32;
+    let mut in_string = false;
+    let mut escape = false;
+    let mut last_object_close: Option<usize> = None;
+
+    for (i, &b) in bytes.iter().enumerate() {
+        if escape {
+            escape = false;
+            continue;
+        }
+        if in_string {
+            match b {
+                b'\\' => escape = true,
+                b'"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        match b {
+            b'"' => in_string = true,
+            b'{' => brace_depth += 1,
+            b'}' => {
+                brace_depth -= 1;
+                // Just closed a top-level object inside the array
+                // (brace_depth == 0 AND we're 1 deep in brackets).
+                if brace_depth == 0 && bracket_depth == 1 {
+                    last_object_close = Some(i);
+                }
+            }
+            b'[' => bracket_depth += 1,
+            b']' => bracket_depth -= 1,
+            _ => {}
+        }
+    }
+
+    let close_pos = last_object_close?;
+    let salvaged = format!("[{}]", &s[1..=close_pos]);
+    serde_json::from_str(&salvaged).ok()
 }
 
 #[cfg(test)]
@@ -357,5 +442,39 @@ mod tests {
         let input = make_input();
         let result = synthesize_recommendations(&mock, &input, &default_pricing_table()).await;
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn salvage_truncated_array_returns_complete_prefix() {
+        // Two complete objects + one truncated mid-string. Mirrors the
+        // real-world max_tokens-cap shape from v0.5.16 dogfood.
+        let truncated = r#"[
+            { "name": "First", "tier_id": "time-reclaimers" },
+            { "name": "Second", "tier_id": "expertise-amplifiers" },
+            { "name": "Third truncated", "tier_id": "time-reclai"#;
+        let salvaged = salvage_truncated_array(truncated).expect("should salvage");
+        let arr = salvaged.as_array().unwrap();
+        assert_eq!(arr.len(), 2);
+        assert_eq!(arr[0]["name"], "First");
+        assert_eq!(arr[1]["name"], "Second");
+    }
+
+    #[test]
+    fn salvage_returns_none_when_no_complete_object() {
+        let truncated = r#"[ { "name": "Half-bui"#;
+        assert!(salvage_truncated_array(truncated).is_none());
+    }
+
+    #[test]
+    fn salvage_handles_escaped_quotes_and_braces_in_strings() {
+        // Make sure brace-counting doesn't get fooled by `}` or `{`
+        // that appear inside a string value.
+        let truncated = r#"[
+            { "code": "if (x) { return \"}\"; }", "name": "ok" },
+            { "code": "trun"#;
+        let salvaged = salvage_truncated_array(truncated).expect("should salvage");
+        let arr = salvaged.as_array().unwrap();
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["name"], "ok");
     }
 }
